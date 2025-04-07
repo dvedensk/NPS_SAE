@@ -17,7 +17,7 @@ get_PS <- function(pop.df, type="PPS", samp.frac=.01){#type is PPS or some other
     weights <- weights[sample.idx]
 
     return(list(weights=weights, idx=sample.idx))
-} 
+}
 
 get_NPS <- function(pop.df, noise.level=2, #sd of noise for governing ddi
                     samp.frac=.2, include.internet=F){
@@ -34,29 +34,28 @@ get_NPS <- function(pop.df, noise.level=2, #sd of noise for governing ddi
     weights <- 1/inclusion_probs
     sample.idx <- which(UPpoisson(inclusion_probs) == 1)
     sample.size <- length(sample.idx)
-    
+
     #for assessing data defect index, we may want to calculate the following: 
     #\rho_{R,G}:
     #cor(pop.df[sample.idx,]$WAGP, popWeights[sample.idx])
     #problem difficulty \sigma2_G:
     #var(pop.df[sample.idx,]$WAGP)
 
-    return(list(weights=weights, idx=sample.idx))    
+    return(list(weights=weights, idx=sample.idx))
 }
 
 ##Process the population file
-#filenames <- paste0("psam_pus",c("a","b","c","d"),".csv")
-households <- read_csv("psam_husa.csv", col_select=c("SERIALNO", "ACCESSINET", "TEL"))
-persons <- read_csv("psam_pusa.csv", col_select=c("SERIALNO",
+households <- read_csv("psam_h06.csv", col_select=c("SERIALNO", "ACCESSINET", "TEL"))
+persons <- read_csv("psam_p06.csv", col_select=c("SERIALNO",
                                                  "PWGTP",
-                                                 "PUMA", 
-                                                 "STATE", 
+                                                 "PUMA",
+                                                 "STATE",
                                                  "AGEP",
                                                  "RAC1P", #Race (9 levels)
                                                  "SEX",
                                                  "WAGP", #Wages/salary past 12 months
                                                  "SCHL", #Collapse into fewer categories
-                                                 "HICOV"))
+                                                 "HICOV")) #Health insurance (1 = covered, 2 = not covered)
 
 acs.pop <- persons %>% left_join(households, by=c("SERIALNO"))
 acs.pop <- acs.pop %>% filter(substr(SERIALNO, start=5,stop=6)=="HU") %>% #exclude group quarters
@@ -69,13 +68,15 @@ Nsim <- 100
 prob.samples <- non.prob.samples <- list()
 for(sim in 1:Nsim){
     #do we want to be able to make PS and NPS disjoint?
-    ps <- prob.samples[[sim]] <- get_PS(pop.df=acs.pop, samp.frac=.01)
-    nps <- non.prob.samples[[sim]] <- get_NPS(pop.df=acs.pop, noise.level=2,
+    prob.samples[[sim]] <- get_PS(pop.df=acs.pop, samp.frac=.002)
+    non.prob.samples[[sim]] <- get_NPS(pop.df=acs.pop, noise.level=2,
                                               samp.frac=.1, include.internet=F)
-    
+
     ps.scale.weights <- length(ps$idx) *  ps$weights/sum(ps$weights)
     nps.scale.weights <- length(nps$idx) *  nps$weights/sum(nps$weights)
 
+    ps <- acs.pop[ps$idx, ]
+    nps <- acs.pop[nps$idx, ]
     #fit models here:
 }
 
