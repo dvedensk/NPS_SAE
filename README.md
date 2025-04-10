@@ -8,4 +8,4 @@ and
 
 https://www2.census.gov/programs-surveys/acs/data/pums/2023/5-Year/csv_hca.zip
 
-Then run simulation.R
+Then run `simulation.R`.

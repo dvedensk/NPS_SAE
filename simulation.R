@@ -1,6 +1,7 @@
 library(readr)
 library(dplyr)
-library(tidyverse)
+# library(tidyverse) # faster, safer, and requires less memory to 
+                     # import individual packages from the tidyverse
 library(lobstr)
 library(sampling)
 
@@ -68,8 +69,8 @@ Nsim <- 100
 prob.samples <- non.prob.samples <- list()
 for(sim in 1:Nsim){
     #do we want to be able to make PS and NPS disjoint?
-    prob.samples[[sim]] <- get_PS(pop.df=acs.pop, samp.frac=.002)
-    non.prob.samples[[sim]] <- get_NPS(pop.df=acs.pop, noise.level=2,
+    prob.samples[[sim]] <- ps <- get_PS(pop.df=acs.pop, samp.frac=.002)
+    non.prob.samples[[sim]] <- nps <- get_NPS(pop.df=acs.pop, noise.level=2,
                                               samp.frac=.1, include.internet=F)
 
     ps.scale.weights <- length(ps$idx) *  ps$weights/sum(ps$weights)
@@ -80,6 +81,8 @@ for(sim in 1:Nsim){
     #fit models here:
 }
 
-save(list(prob.samples=prob.samples,
-          non.prob.samples=non.prob.samples),
-     file="ACS_NPS_samples.RData"))
+all.samples <- list(prob.samples=prob.samples,
+                    non.prob.samples=non.prob.samples)
+
+save(all.samples,
+     file="ACS_NPS_samples.RData")
