@@ -68,8 +68,8 @@ Nsim <- 100
 prob.samples <- non.prob.samples <- list()
 for(sim in 1:Nsim){
     #do we want to be able to make PS and NPS disjoint?
-    prob.samples[[sim]] <- get_PS(pop.df=acs.pop, samp.frac=.002)
-    non.prob.samples[[sim]] <- get_NPS(pop.df=acs.pop, noise.level=2,
+    ps <- prob.samples[[sim]] <- get_PS(pop.df=acs.pop, samp.frac=.002)
+    nps <- non.prob.samples[[sim]] <- get_NPS(pop.df=acs.pop, noise.level=2,
                                               samp.frac=.1, include.internet=F)
 
     ps.scale.weights <- length(ps$idx) *  ps$weights/sum(ps$weights)
