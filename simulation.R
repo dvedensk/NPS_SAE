@@ -1,7 +1,5 @@
 library(readr)
 library(dplyr)
-# library(tidyverse) # faster, safer, and requires less memory to 
-                     # import individual packages from the tidyverse
 library(lobstr)
 library(sampling)
 
@@ -87,13 +85,13 @@ all.samples <- list(prob.samples=prob.samples,
 save(all.samples,
      file="ACS_NPS_samples.RData")
 
-# TODO: test on small data w/ noninformative prior
+# NPS Prior Method
 nps_post <- function(y, X, mu_beta, k0, V, a, b) {
     n <- nrow(X)
     p <- ncol(X)
 
     XTX <- crossprod(X)
-    inv_scale_mat <- solve(XTX + solve(k0 * V)) # TODO: check why eqn. (9) is different
+    inv_scale_mat <- solve(XTX + solve(k0 * V))
     
     beta_hat <- solve(XTX) %*% crossprod(X, y) # eqn 7
     W <- inv_scale_mat %*% XTX # eqn 6
@@ -102,7 +100,24 @@ nps_post <- function(y, X, mu_beta, k0, V, a, b) {
     RSS <- crossprod(y - X %*% beta_hat) # eqn 10
     bet_minus_mu <- beta_hat - mu_beta
     SS <- RSS + crossprod(bet_minus_mu, solve(solve(XTX) + k0 * V) %*% bet_minus_mu) # eqn 9
-    post_var <- inv_scale_mat %*% (SS + 2 * b) / (n + 2 * a - 2) # eqn 8
+    SS <- SS[1] # convert to scalar data type
+    post_var <- inv_scale_mat * (SS + 2 * b) / (n + 2 * a - 2) # eqn 8
 
+    post_mn <- as.vector(post_mn)
     return(list(mn = post_mn, vr = post_var))
 }
+
+# illustration of nps_post; testing on small data w/ noninformative prior
+set.seed(0)
+test_x <- rnorm(60)
+test_X <- cbind(1, test_x)
+test_beta <- c(5, 7)
+test_y <- test_X %*% test_beta + rnorm(60, 0, 3)
+
+plot(test_x, test_y)
+
+est <- nps_post(test_y, test_X, rep(0, 2), 60, diag(1, 2), 0, 0)
+abline(est$mn[1], est$mn[2])
+
+fitted_y <- test_X %*% est$mn
+points(test_x, fitted_y, col = "red")
