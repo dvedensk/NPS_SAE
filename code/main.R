@@ -2,8 +2,10 @@ require(readr)
 require(dplyr)
 require(tidyverse)
 require(sampling)
-source(file.path("R", "sampling_functions.R"))
-source(file.path("R", "nps_prior.R"))
+require(mvtnorm)
+
+source(file.path("code", "sampling_functions.R"))
+source(file.path("code", "nps_prior.R"))
 
 set.seed(99)
 
@@ -36,18 +38,4 @@ for(sim in 1:Nsim){
 save(list(prob.samples=prob.samples,
           non.prob.samples=non.prob.samples),
      file=file.path("data", "ACS_NPS_samples.RData"))
-
-# illustration of nps prior method
-# testing on small fake data w/ noninformative prior
-set.seed(0)
-test_x <- rnorm(60)
-test_X <- cbind(1, test_x)
-test_beta <- c(5, 7)
-test_y <- test_X %*% test_beta + rnorm(60, 0, 3)
-
-plot(test_x, test_y)
-
-est <- nps_post(test_y, test_X, rep(0, 2), 60, diag(1, 2), 0, 0)
-abline(est$mn[1], est$mn[2])
-
-points(test_x, est$fitted_y, col = "red")
+     
