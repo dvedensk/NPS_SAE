@@ -2,12 +2,15 @@ require(readr)
 require(dplyr)
 require(tidyverse)
 require(sampling)
-source("sampling_functions.R")
+require(mvtnorm)
+
+source(file.path("code", "sampling_functions.R"))
+source(file.path("code", "nps_prior.R"))
 
 set.seed(99)
 
 #load population file
-read_csv("data/ACS_NPS_pop.csv")
+read_csv(file.path("data", "ACS_NPS_pop.csv"))
 
 #population values to compare against
 true.values <- acs.pop %>% group_by(PUMA) %>%
@@ -34,4 +37,5 @@ for(sim in 1:Nsim){
 
 save(list(prob.samples=prob.samples,
           non.prob.samples=non.prob.samples),
-     file="data/ACS_NPS_samples.RData")
+     file=file.path("data", "ACS_NPS_samples.RData"))
+     

@@ -1,6 +1,6 @@
 require(readr)
 
-households <- read_csv("psam_h06.csv", col_select=c("SERIALNO", "ACCESSINET", "TEL"))
+households <- read_csv(file.path("data", "psam_h06.csv"), col_select=c("SERIALNO", "ACCESSINET", "TEL"))
 persons <- read_csv("psam_p06.csv", col_select=c("SERIALNO",
                                                  "PWGTP",
                                                  "PUMA",
@@ -18,4 +18,4 @@ acs.pop <- acs.pop %>% filter(substr(SERIALNO, start=5,stop=6)=="HU") %>% #exclu
 
 acs.pop <- acs.pop <- acs.pop %>% mutate(HICOV = ifelse(HICOV==2, 0, 1)) #recode so 0 = "NO"
 
-write_csv(acs.pop, file="ACS_NPS_pop.csv")
+write_csv(acs.pop, file=file.path("data", "ACS_NPS_pop.csv"))
