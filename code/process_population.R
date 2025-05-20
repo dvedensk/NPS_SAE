@@ -31,7 +31,8 @@ acs_pop <- acs_pop %>% mutate(HICOV = ifelse(HICOV == 2, 0, 1))  %>%
                              .default = "Other")) %>%
     mutate(RAC1P = ifelse(HISP == "01", RAC1P, "Hispanic")) %>%
     mutate(SEX = as.factor(SEX),
-           RAC1P = as.factor(RAC1P)) %>%
+           RAC1P = as.factor(RAC1P),
+           PUMA = as.factor(PUMA)) %>%
     select(-HISP) 
 
-write_csv(acs_pop, file="ACS_NPS_pop.csv")
+write_csv(acs_pop, file=file.path("data","ACS_NPS_pop.csv"))
