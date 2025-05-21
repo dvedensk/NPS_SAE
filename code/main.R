@@ -91,8 +91,8 @@ results_df <- results %>% list_rbind(names_to="sim_num")
 summary_df <- true_values %>%
     left_join(results_df, by="PUMA") %>%
     group_by(model) %>%
-    summarize(MSE = mean( (HICOV - mean)^2 ),
-              MAB = mean(abs(HICOV - mean(mean))),
+    summarize(MSE = mean( (HICOV - point_est)^2 ),
+              MAB = mean(abs(HICOV - mean(point_est))),
               Coverage = mean(between(HICOV, lower_CI, upper_CI)),
               `Int. Score` = mean(int_score(alpha, HICOV, lower_CI, upper_CI)))
               
