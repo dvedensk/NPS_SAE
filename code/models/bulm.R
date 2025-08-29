@@ -1,7 +1,3 @@
-library(BayesLogit)
-library(Matrix)
-library(LaplacesDemon)
-
 # This function fits a survey-weighted, binary unit-level model via Gibbs sampling
 # X is the input covariate matrix, one row per sample unit
 # Psi is the matrix of spatial basis functions, one row per sample unit
