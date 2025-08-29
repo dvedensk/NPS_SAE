@@ -54,19 +54,24 @@ for (sim in 1:Nsim) {
   prob_samples[[sim]]    <- ps
   nonprob_samples[[sim]] <- nps
   
-  # 2. Scale weights and extract data frames
+  # 2. Scale weights for pseudolikelihood models 
   ps_scale_weights  <- length(ps$idx)  * ps$weights  / sum(ps$weights)
   nps_scale_weights <- length(nps$idx) * nps$weights / sum(nps$weights)
-  
+
+  # 3. Extract PS and NPS data frames
   ps  <- acs_pop[ps$idx, ]
   nps <- acs_pop[nps$idx, ]
   
-  # 3. Build design matrices for PS
+  # 4. Build design matrices for PS and NPS separately
   X_ps   <- model.matrix(X_formula,   data = ps)
   Psi_ps <- model.matrix(Psi_formula, data = ps)
   y_ps   <- ps$HICOV
+
+  X_nps   <- model.matrix(X_formula,   data = nps)
+  Psi_nps <- model.matrix(Psi_formula, data = nps)
+  y_nps   <- nps$HICOV
   
-  # 4. Direct estimate on probability sample
+  # 5. Direct estimate on probability sample
   samp.design <- svydesign(ids = ~1, weights = ~PWGTP, data = ps)
   direst <- svyby(~HICOV, ~PUMA, samp.design, svymean, vartype = "se") %>%
     rename(point_est = HICOV) %>%
@@ -75,7 +80,7 @@ for (sim in 1:Nsim) {
     select(-se) %>%
     mutate(model = "direst")
   
-  # 5. BULM on probability sample
+  # 6. Fit unit-level model on probability sample
   bulm_out <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
     alpha          = alpha,
@@ -92,15 +97,10 @@ for (sim in 1:Nsim) {
   )
   bulm_out$model <- "bulm"
   
-  # 6. Build design matrices for NPS
-  X_nps   <- model.matrix(X_formula,   data = nps)
-  Psi_nps <- model.matrix(Psi_formula, data = nps)
-  y_nps   <- nps$HICOV
-  
-  # 7. Estimate IP weights for NPS
+  # 7. Estimate IP weights for NPS and fit unit-level model 
+  #    on nonprobability sample with them (Tracy)
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
   
-  # 8. BULM on nonprobability sample with IPW
   bulm_ipw <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
     alpha          = alpha,
@@ -116,8 +116,14 @@ for (sim in 1:Nsim) {
     summaries      = TRUE
   )
   bulm_ipw$model <- "bulm_ipw"
+
+  # 8. Fit NPS-informed prior model (Ethan)
+
+  # 9. Fit MRP (Qi)
+
+  # 10. Fit VSW method (Qi)
   
-  # 9. Combine results
+  # 11. Combine results
   results[[sim]] <- rbind(
     direst,
     bulm_out,
