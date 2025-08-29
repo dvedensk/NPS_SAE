@@ -8,7 +8,6 @@ int_score <- function(alpha, truth, L, U){
 # via a logistic model distinguishing prob vs. non‐prob cases
 
 estimate_ipw <- function(ps, nps, cov_formula) {
-  library(dplyr)
   # 1. Stack and label
   combined <- bind_rows(
     ps  %>% mutate(Z = 0),

@@ -4,9 +4,6 @@ vsw_out <- function(ps, nps, X_formula){
   y_ps   <- ps$HICOV
   X_nps <- model.matrix(X_formula, data = nps)
   y_nps <- nps$HICOV
-  
-  
-  
   #fit models here:
   model_ps <- glm(y_ps~X_ps, family = binomial(link = "logit"))
   model_nps <- glm(y_nps~X_nps, family = binomial(link = "logit"), data = nps)
@@ -47,13 +44,10 @@ vsw_out <- function(ps, nps, X_formula){
     }
   }
   
-  mse <- mean((combined_results[,1] - true_values$HICOV)^2)
-  mab <- mean(abs(combined_results[,1] - true_values$HICOV))
-  cr = is <- rep(NA, length(mse))
-  summary_df <- cbind(mse, mab, cr, is)
-  
-  return(summary_df)
-}
+  return(
+    data.frame("PUMA" = Z_hat_nps$PUMA, "point_est" = combined_results[,1], "lower_CI" = NA, "upper_CI" = NA, "model" = "VSW")
+)
+    }
   
 
 
