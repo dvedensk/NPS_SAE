@@ -8,7 +8,8 @@ require(purrr)
 
 source(file.path("code","sampling_functions.R"))
 source(file.path("code","utils.R"))   # utils.R must define estimate_ipw()
-source(file.path("models", "bulm.R"))
+source(file.path("code","models","bulm.R"))
+source(file.path("code","models","VSW.R"))
 
 set.seed(99)
 
@@ -35,11 +36,11 @@ Psi_formula <- as.formula("~ -1 + PUMA")
 alpha <- .05
 
 # take samples
-Nsim <- 100
+Nsim <- 1
 prob_samples    <- list()
 nonprob_samples <- list()
 results         <- list()
-
+summary_df_VSW <- list()
 for (sim in 1:Nsim) {
   print(sim)
   
@@ -71,7 +72,7 @@ for (sim in 1:Nsim) {
            upper_CI = point_est + qnorm(1 - alpha/2) * se) %>%
     select(-se) %>%
     mutate(model = "direst")
-  
+
   # 5. BULM on probability sample
   bulm_out <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
@@ -88,15 +89,15 @@ for (sim in 1:Nsim) {
     summaries      = TRUE
   )
   bulm_out$model <- "bulm"
-  
+
   # 6. Build design matrices for NPS
   X_nps   <- model.matrix(X_formula,   data = nps)
   Psi_nps <- model.matrix(Psi_formula, data = nps)
   y_nps   <- nps$HICOV
-  
+
   # 7. Estimate IP weights for NPS
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
-  
+
   # 8. BULM on nonprobability sample with IPW
   bulm_ipw <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
@@ -113,13 +114,14 @@ for (sim in 1:Nsim) {
     summaries      = TRUE
   )
   bulm_ipw$model <- "bulm_ipw"
-  
+
   # 9. Combine results
   results[[sim]] <- rbind(
     direst,
     bulm_out,
     bulm_ipw
   )
+  summary_df_VSW[[sim]] <- vsw_out(ps, nps, X_formula)
 }
 
 # Aggregate across simulations
@@ -135,6 +137,8 @@ summary_df <- true_values %>%
     Coverage  = mean(between(HICOV, lower_CI, upper_CI)),
     `Int. Score` = mean(int_score(alpha, HICOV, lower_CI, upper_CI))
   )
+
+# VSW method doesn't have uncertainty quantification, so I return NA's for them. That'swhy I calculated it alone.
 
 # Save results
 save(
