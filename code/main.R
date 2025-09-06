@@ -140,7 +140,17 @@ for (sim in 1:Nsim) {
 
   # 8. Fit NPS-informed prior model (Ethan)
 
-  # 9. Fit MRP (Qi)
+  # 9. Fit MRP (Qianyu)
+  mrp=getMRP(MR=nps,
+             Ps=ps,
+             P=acs_pop)
+  #  mrp_r
+  mrpr=mrp$puma_summary_mrpr[,c("PUMA","point_est","lower_CI","upper_CI","model")]
+  
+  #  mrp_p
+  mrpp=mrp$puma_summary_mrpp[,c("PUMA","point_est","lower_CI","upper_CI","model")]
+  
+  
   
   # 10. Fit VSW method (Qi)
   result_VSW <- vsw_out(ps, nps, X_formula) # a vector of 4, (mse, mab, cr, is)
@@ -150,7 +160,10 @@ for (sim in 1:Nsim) {
     direst,
     bulm_out,
     bulm_ipw,
-    result_VSW
+    result_VSW,
+    mrpr,
+    mrprp
+    
   )
 
 }
