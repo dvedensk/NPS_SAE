@@ -83,7 +83,7 @@ for (sim in 1:Nsim) {
 
 
   # 5. BULM on probability sample
-
+  model_result <- method_scott_dislikes()
   
   # 6. Fit unit-level model on probability sample
 
