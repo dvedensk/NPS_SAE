@@ -14,6 +14,22 @@ source(file.path("code","utils.R"))   # utils.R must define estimate_ipw()
 source(file.path("code","models","bulm.R"))
 source(file.path("code","models","VSW.R"))
 
+source(file.path("code","models","mrp_all.R"))
+#load .stan
+mod <- cmdstan_model(
+  file.path("code","si2.stan"),
+  cpp_options = list(stan_threads = TRUE))
+
+modINT <- cmdstan_model(
+  file.path("code","mrp_int2.stan"),
+  cpp_options = list(stan_threads = TRUE))
+Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
+
+
+
+
+
+
 set.seed(99)
 
 # load population file
@@ -141,15 +157,29 @@ for (sim in 1:Nsim) {
   # 8. Fit NPS-informed prior model (Ethan)
 
   # 9. Fit MRP (Qianyu)
+  
+  
+  
   mrp=getMRP(MR=nps,
-             Ps=ps,
-             P=acs_pop)
+             ps=ps_star,
+             acs_pop=acs_pop)
   #  mrp_r
-  mrpr=mrp$puma_summary_mrpr[,c("PUMA","point_est","lower_CI","upper_CI","model")]
+  mrpr=mrp$puma_summary_mrpr
   
   #  mrp_p
-  mrpp=mrp$puma_summary_mrpp[,c("PUMA","point_est","lower_CI","upper_CI","model")]
+  mrpp=mrp$puma_summary_mrpp
   
+
+    mrp1=getMRP_INT(MR=nps,
+                    ps=ps,
+                    acs_pop=acs_pop,
+                    mod = modINT)
+    
+
+  #  mrp_int
+  mrpint=mrp1$puma_summary_mrpp
+  
+
   
   
   # 10. Fit VSW method (Qi)
