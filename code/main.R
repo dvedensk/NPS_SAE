@@ -8,11 +8,13 @@ library(purrr)
 library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
+library(matrixStats)
 
 source(file.path("code","sampling_functions.R"))
-source(file.path("code","utils.R"))   # utils.R must define estimate_ipw()
+source(file.path("code","utils.R"))
 source(file.path("code","models","bulm.R"))
 source(file.path("code","models","VSW.R"))
+source(file.path("code","models","nps_prior.R"))
 
 set.seed(99)
 
@@ -62,6 +64,9 @@ for (sim in 1:Nsim) {
   # 3. Extract PS and NPS data frames
   ps  <- acs_pop[ps$idx, ]
   nps <- acs_pop[nps$idx, ]
+
+  PUMA <- ps$PUMA
+  PUMA_levels <- unique(PUMA)
   
   # 4. Build design matrices for PS and NPS separately
   X_ps   <- model.matrix(X_formula,   data = ps)
@@ -71,7 +76,7 @@ for (sim in 1:Nsim) {
   X_nps   <- model.matrix(X_formula,   data = nps)
   Psi_nps <- model.matrix(Psi_formula, data = nps)
   y_nps   <- nps$HICOV
-  
+
   # 5. Direct estimate on probability sample
   samp.design <- svydesign(ids = ~1, weights = ~PWGTP, data = ps)
   direst <- svyby(~HICOV, ~PUMA, samp.design, svymean, vartype = "se") %>%
@@ -81,8 +86,8 @@ for (sim in 1:Nsim) {
     select(-se) %>%
     mutate(model = "direst")
 
-
   # 5. BULM on probability sample
+
 
   
   # 6. Fit unit-level model on probability sample
@@ -103,22 +108,16 @@ for (sim in 1:Nsim) {
   )
   bulm_out$model <- "bulm"
 
-
-  # 6. Build design matrices for NPS
-  X_nps   <- model.matrix(X_formula,   data = nps)
-  Psi_nps <- model.matrix(Psi_formula, data = nps)
-  y_nps   <- nps$HICOV
-
   # 7. Estimate IP weights for NPS
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
 
   # 8. BULM on nonprobability sample with IPW
 
   
-  # 7. Estimate IP weights for NPS and fit unit-level model 
+
+  # 9. Estimate IP weights for NPS and fit unit-level model 
   #    on nonprobability sample with them (Tracy)
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
-  
 
   bulm_ipw <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
@@ -136,11 +135,40 @@ for (sim in 1:Nsim) {
   )
   bulm_ipw$model <- "bulm_ipw"
 
-  # 9. Combine results
+  # 10. Fit NPS-informed prior model (Ethan)
+  
+  # First, use nps as prior
 
-  # 8. Fit NPS-informed prior model (Ethan)
+  # FIXME: RAC1P4 caused (X_ps^T X_ps) to be singular 
+  my_X_ps <- X_ps[,setdiff(colnames(X_ps), "RAC1P4")]
+  my_X_nps <- X_nps[,setdiff(colnames(X_nps), "RAC1P4")]
 
-  # 9. Fit MRP (Qianyu)
+  niter <- 4000
+  # TODO: ask whether we should leave out the rand. fx.
+  trad_res_df <- nps_fit(
+    niter,
+    y_ps, 
+    cbind(my_X_ps[,2:ncol(my_X_ps)], Psi_ps), 
+    y_nps, 
+    cbind(my_X_nps[,2:ncol(my_X_nps)], Psi_nps), 
+    PUMA_levels,
+    alpha
+  ) %>% 
+    mutate(submodel = paste("Trad", submodel))
+  
+  # FIXME: this crashes the R session. Figure out why.
+  # rev_res_df <- nps_fit(
+  #   niter,
+  #   y_nps, 
+  #   my_X_nps, 
+  #   y_ps, 
+  #   my_X_ps, 
+  #   PUMA_levels,
+  #   alpha
+  # ) %>% 
+  #   mutate(submodel = paste("Reverse", submodel))
+
+  # 11. Fit MRP (Qianyu)
   mrp=getMRP(MR=nps,
              Ps=ps,
              P=acs_pop)
@@ -150,12 +178,10 @@ for (sim in 1:Nsim) {
   #  mrp_p
   mrpp=mrp$puma_summary_mrpp[,c("PUMA","point_est","lower_CI","upper_CI","model")]
   
-  
-  
-  # 10. Fit VSW method (Qi)
+  # 12. Fit VSW method (Qi)
   result_VSW <- vsw_out(ps, nps, X_formula) # a vector of 4, (mse, mab, cr, is)
-  # 11. Combine results
 
+  # 13. Combine results
   results[[sim]] <- rbind(
     direst,
     bulm_out,
@@ -163,9 +189,8 @@ for (sim in 1:Nsim) {
     result_VSW,
     mrpr,
     mrprp
-    
+    wis_res
   )
-
 }
 
 # Aggregate across simulations
