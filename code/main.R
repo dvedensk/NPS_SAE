@@ -62,23 +62,23 @@ results         <- list()
 summary_df_VSW <- list()
 for (sim in 1:Nsim) {
   print(sim)
-  
+
   # 1. Draw probability and nonprobability samples
   ps  <- get_strat_PS(pop_df = acs_pop, samp_frac = .002)
   nps <- get_NPS(pop_df = acs_pop, noise_level = 2,
                  samp_frac = .1, include_internet = FALSE)
-  
+
   prob_samples[[sim]]    <- ps
   nonprob_samples[[sim]] <- nps
-  
-  # 2. Scale weights for pseudolikelihood models 
+
+  # 2. Scale weights for pseudolikelihood models
   ps_scale_weights  <- length(ps$idx)  * ps$weights  / sum(ps$weights)
   nps_scale_weights <- length(nps$idx) * nps$weights / sum(nps$weights)
 
   # 3. Extract PS and NPS data frames
   ps  <- acs_pop[ps$idx, ]
   nps <- acs_pop[nps$idx, ]
-  
+
   # 4. Build design matrices for PS and NPS separately
   X_ps   <- model.matrix(X_formula,   data = ps)
   Psi_ps <- model.matrix(Psi_formula, data = ps)
@@ -87,7 +87,7 @@ for (sim in 1:Nsim) {
   X_nps   <- model.matrix(X_formula,   data = nps)
   Psi_nps <- model.matrix(Psi_formula, data = nps)
   y_nps   <- nps$HICOV
-  
+
   # 5. Direct estimate on probability sample
   samp.design <- svydesign(ids = ~1, weights = ~PWGTP, data = ps)
   direst <- svyby(~HICOV, ~PUMA, samp.design, svymean, vartype = "se") %>%
@@ -100,7 +100,7 @@ for (sim in 1:Nsim) {
 
   # 5. BULM on probability sample
 
-  
+
   # 6. Fit unit-level model on probability sample
 
   bulm_out <- bulm_results(
@@ -130,11 +130,11 @@ for (sim in 1:Nsim) {
 
   # 8. BULM on nonprobability sample with IPW
 
-  
-  # 7. Estimate IP weights for NPS and fit unit-level model 
+
+  # 7. Estimate IP weights for NPS and fit unit-level model
   #    on nonprobability sample with them (Tracy)
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
-  
+
 
   bulm_ipw <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
@@ -157,31 +157,31 @@ for (sim in 1:Nsim) {
   # 8. Fit NPS-informed prior model (Ethan)
 
   # 9. Fit MRP (Qianyu)
-  
-  
-  
+
+
+
   mrp=getMRP(MR=nps,
-             ps=ps_star,
+             ps=ps,
              acs_pop=acs_pop)
   #  mrp_r
   mrpr=mrp$puma_summary_mrpr
-  
+
   #  mrp_p
   mrpp=mrp$puma_summary_mrpp
-  
+
 
     mrp1=getMRP_INT(MR=nps,
                     ps=ps,
                     acs_pop=acs_pop,
                     mod = modINT)
-    
+
 
   #  mrp_int
   mrpint=mrp1$puma_summary_mrpp
-  
 
-  
-  
+
+
+
   # 10. Fit VSW method (Qi)
   result_VSW <- vsw_out(ps, nps, X_formula) # a vector of 4, (mse, mab, cr, is)
   # 11. Combine results
@@ -193,7 +193,7 @@ for (sim in 1:Nsim) {
     result_VSW,
     mrpr,
     mrprp
-    
+
   )
 
 }
