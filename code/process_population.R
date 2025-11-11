@@ -9,6 +9,7 @@ persons <- read_csv(file=file.path("data", "psam_p06.csv"),
                                  "PUMA",
                                  #"STATE", # not necessary while we consider just CA
                                  "AGEP",
+                                 "CIT",
                                  "RAC1P", # Race (9 levels)
                                  "HISP", # Hispanic origin, "01" corresponds to non-hispanic
                                  "SEX",
