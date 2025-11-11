@@ -1,20 +1,35 @@
-get_strat_PS <- function(pop_df, samp_frac) {
+get_strat_PS <- function(pop_df, samp_frac, w_wage=.2, w_pwgt=.2, w_cit=.2) {
   PUMAs <- unique(pop_df$PUMA)
   weights <- idx <- c()
   for (PUMA in PUMAs) {
     puma_ids <- which(pop_df$PUMA == PUMA)
-    tmp <- get_PS(pop_df=pop_df[puma_ids, ], samp_frac=samp_frac)
+    tmp <- get_PS(pop_df=pop_df[puma_ids, ],
+                  samp_frac=samp_frac,
+                  w_wage=w_wage,
+                  w_pwgt=w_pwgt,
+                  w_cit=w_cit)
     weights <- c(weights, tmp$weights)   
     idx <- c(idx, tmp$idx)
+  }
+  if(sum(ps$weights==1) > 0) {
+    stop("Some weights were equal to 1. Adjust w_1 and w_2 accordingly.")
   }
   return(list(weights=weights, idx=idx))
 }
 
-get_PS <- function(pop_df, type="PPS", samp_frac=.01) {#type is PPS or some other size variable
+get_PS <- function(pop_df,
+                   type="PPS",
+                   samp_frac=.01,
+                   w_cit=.2,
+                   w_wage=.2,
+                   w_pwgt=.2) {#type is PPS or some other size variable
+    
   sample_size <- max(floor(nrow(pop_df) * samp_frac), 20) #need to ensure a minimum
   #create the size variable that will be sampled in proportion to 
   #(making this variable a function of the survey weights induces an informative design)
-  size_var <- as.numeric(exp(.2*scale(pop_df$WAGP) + .4*scale(pop_df$PWGTP)))
+  size_var <- as.numeric(exp(w_wage*scale(pop_df$WAGP) +
+                             w_pwgt*scale(pop_df$PWGTP)
+                             + w_cit*(pop_df$CIT == 5)))
   inclusion_probs <- inclusionprobabilities(size_var, sample_size)
   inclusion_probs <- inclusion_probs/sum(inclusion_probs) * sample_size
   #survey weights are inverse probabilities of selection
