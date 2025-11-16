@@ -1,0 +1,89 @@
+---
+title: "Model Testing Template"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Load Data
+
+```{r load-libraries}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(cmdstanr)
+```
+
+```{r regenerate-samples}
+# Regenerate test samples with current weights
+source("create_test_sample.R")
+
+cat("✓ Samples regenerated\n")
+```
+```
+
+# Data Overview
+
+```{r overview}
+data.frame(
+    Sample = c("Population", "PS", "NPS"),
+    N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
+    HICOV_Rate = c(mean(acs_pop$HICOV), mean(ps_df$HICOV), mean(nps_df$HICOV))
+)
+```
+
+# Model Specification
+
+## Mathematical Form
+
+$$
+\begin{aligned}
+y_i &\sim \text{[Distribution]} \\
+\text{[link]}(\mu_i) &= \text{[linear predictor]} \\
+\end{aligned}
+$$
+
+**Priors:**
+$$
+\text{[Fill in priors if applicable]}
+$$
+
+## Important pieces from the model fitting code 
+
+```{r show-stan, eval=FALSE}
+# cat(readLines("../models/your_model.R"), sep = "\n")
+```
+
+# Fit Model
+
+```{r compile-model}
+
+```
+
+```{r fit-model, cache=TRUE}
+# start_time <- Sys.time()
+# fit <- [your fitting function]
+# cat("Fitted in", round(Sys.time() - start_time, 2), "seconds\n")
+```
+
+# Results
+
+```{r diagnostics}
+# Check convergence, extract estimates, etc.
+```
+
+```{r visualize}
+# Plot estimates vs truth
+```
+
+```{r metrics}
+# Calculate RMSE, bias, etc.
+```
+
