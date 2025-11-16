@@ -19,10 +19,10 @@ persons <- read_csv(file=file.path("data", "psam_p06.csv"),
 
 acs_pop <- persons %>% left_join(households, by=c("SERIALNO"))
 # exclude group quarters:
-acs_pop <- acs_pop %>% filter(substr(SERIALNO, start=5, stop=6) == "HU") %>% 
+acs_pop <- acs_pop %>% filter(substr(SERIALNO, start=5, stop=6) == "HU") %>%
     filter(!is.na(WAGP))
 
-# recode response so 0 is "No" and 1 is "Yes" and bin covariates 
+# recode response so 0 is "No" and 1 is "Yes" and bin covariates
 acs_pop <- acs_pop %>% mutate(HICOV = ifelse(HICOV == 2, 0, 1))  %>%
     mutate(SEX = ifelse(SEX == 1, "Male", "Female"),
            AGEP = cut(AGEP, c(0, 18, 34, 65, Inf), right=F),
@@ -34,6 +34,6 @@ acs_pop <- acs_pop %>% mutate(HICOV = ifelse(HICOV == 2, 0, 1))  %>%
     mutate(SEX = as.factor(SEX),
            RAC1P = as.factor(RAC1P),
            PUMA = as.factor(PUMA)) %>%
-    select(-HISP) 
+    select(-HISP)
 
 write_csv(acs_pop, file=file.path("data","ACS_NPS_pop.csv"))
