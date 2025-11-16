@@ -46,7 +46,7 @@ get_PS <- function(pop_df,
 }
 
 get_NPS <- function(pop_df,
-                    w_cit = 5,
+                    w_cit = 25,
                     w_wage = -10,
                     w_pwgt = -25,
                     samp_frac = .05,

@@ -9,7 +9,7 @@ acs_pop <- read_csv("~/dev/MSS_NPS/data/ACS_NPS_pop.csv")
 
 # Fixed weights
 PS_WEIGHTS <- list(w_cit = 8, w_wage = 8, w_pwgt = -6)
-NPS_WEIGHTS <- list(w_cit = 5, w_wage = -10, w_pwgt = -25)
+NPS_WEIGHTS <- list(w_cit = 25, w_wage = -10, w_pwgt = -25)
 
 # Sample fractions
 PS_SAMP_FRAC <- 0.002
