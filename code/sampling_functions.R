@@ -13,7 +13,7 @@ get_strat_PS <- function(pop_df, samp_frac, w_wage = 8, w_pwgt = -6, w_cit = 8) 
     weights <- c(weights, ps$weights)
     idx <- c(idx, ps$idx)
   }
-  if (sum(ps$weights == 1) > 0) {
+  if (sum(weights == 1) > 0) {
     stop("Some weights were equal to 1. Adjust w_1 and w_2 accordingly.")
   }
   return(list(weights = weights, idx = idx))
