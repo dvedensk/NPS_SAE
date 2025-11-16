@@ -27,7 +27,6 @@ source("create_test_sample.R")
 
 cat("✓ Samples regenerated\n")
 ```
-```
 
 # Data Overview
 
