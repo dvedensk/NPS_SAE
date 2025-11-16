@@ -13,26 +13,21 @@ get_strat_PS <- function(pop_df, samp_frac, w_wage = 0.5, w_pwgt = -0.5, w_cit =
     weights <- c(weights, ps$weights)
     idx <- c(idx, ps$idx)
   }
-  # Check for inclusion probabilities equal to 1 (which result in weights equal to 1)
   # Note: This check was previously implemented incorrectly (only checked the last PUMA in the loop).
-  # After fixing the bug, the original optimized weights (8, 8, -6) were found to create 
-  # inclusion probabilities of 1.0 for ~26% of the sample, which violates probability sampling principles.
-  # The weights were reduced to (0.5, 0.5, -0.5) to avoid this issue while maintaining near-zero 
-  # correlation with HICOV (mean ≈ -0.0004 across 30 seeds).
   if (sum(weights == 1) > 0) {
-    stop("Some weights were equal to 1. Adjust the weights.")
+    stop("Some weights were equal to 1. Adjust the informative sampling weights.")
   }
   return(list(weights = weights, idx = idx))
 }
 
 get_PS <- function(pop_df,
-                   type = "PPS",
+                   # type = "PPS", # seems like this input is no longer used
                    samp_frac = .002,
                    w_cit = 0.5,
                    w_wage = 0.5,
                    w_pwgt = -0.5) { # type is PPS or some other size variable
-
-  sample_size <- floor(nrow(pop_df) * samp_frac)
+  # sets minimal sample size to 1 (higher minimums resulted in the `sum(weights == 1) > 0` check to go off
+  sample_size <- max(floor(nrow(pop_df) * samp_frac), 1)
   # create the size variable that will be sampled in proportion to
   # (making this variable a function of the survey weights induces an informative design)
   # All variables are scaled for comparability
@@ -73,11 +68,7 @@ get_NPS <- function(pop_df,
   sample_size <- length(sample_idx)
   weights <- weights[sample_idx]
 
-  # for assessing data defect index, we may want to calculate the following:
-  # \rho_{R,G}:
-  # cor(pop_df[sample.idx,]$WAGP, popWeights[sample_idx])
-  # problem difficulty \sigma2_G:
-  # var(pop_df[sample_idx,]$WAGP)
+  # for assessing data defect index, see test_ps_nps_correlation.R
 
   # return weights since we may use them for calculating properties of the sample, but
   # we will not use them as...

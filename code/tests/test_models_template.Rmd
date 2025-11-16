@@ -19,12 +19,19 @@ library(readr)
 library(dplyr)
 library(ggplot2)
 library(cmdstanr)
+library(here)
 ```
 
 ```{r regenerate-samples}
 # Regenerate test samples with current weights
-source("create_test_sample.R")
+# Set working directory to project root temporarily
+old_wd <- getwd()
+setwd(here::here())
+source("code/tests/create_test_sample.R")
+setwd(old_wd)
 
+# Load the generated samples
+load(here::here("data/test_sample.RData"))
 cat("✓ Samples regenerated\n")
 ```
 
@@ -32,9 +39,9 @@ cat("✓ Samples regenerated\n")
 
 ```{r overview}
 data.frame(
-    Sample = c("Population", "PS", "NPS"),
-    N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
-    HICOV_Rate = c(mean(acs_pop$HICOV), mean(ps_df$HICOV), mean(nps_df$HICOV))
+  Sample = c("Population", "PS", "NPS"),
+  N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
+  HICOV_Rate = c(mean(acs_pop$HICOV), mean(ps_df$HICOV), mean(nps_df$HICOV))
 )
 ```
 
