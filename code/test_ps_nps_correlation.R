@@ -8,7 +8,7 @@ source("~/dev/MSS_NPS/code/sampling_functions.R")
 acs_pop <- read_csv("~/dev/MSS_NPS/data/ACS_NPS_pop.csv")
 
 # Fixed weights
-PS_WEIGHTS <- list(w_cit = 8, w_wage = 8, w_pwgt = -6)
+PS_WEIGHTS <- list(w_cit = 0.5, w_wage = 0.5, w_pwgt = -0.5)
 NPS_WEIGHTS <- list(w_cit = 25, w_wage = -10, w_pwgt = -25)
 
 # Sample fractions
