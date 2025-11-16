@@ -50,15 +50,15 @@ for (i in 1:N_REPS) {
     include_internet = FALSE
   )
 
-  # Create indicator variables
-  acs_pop$in_ps <- 0
-  acs_pop$in_nps <- 0
-  acs_pop$in_ps[ps$idx] <- 1
-  acs_pop$in_nps[nps$idx] <- 1
+  # Create indicator vectors
+  in_ps <- rep(0, nrow(acs_pop))
+  in_nps <- rep(0, nrow(acs_pop))
+  in_ps[ps$idx] <- 1
+  in_nps[nps$idx] <- 1
 
   # Calculate correlations with HICOV
-  ps_correlations[i] <- cor(acs_pop$in_ps, acs_pop$HICOV)
-  nps_correlations[i] <- cor(acs_pop$in_nps, acs_pop$HICOV)
+  ps_correlations[i] <- cor(in_ps, acs_pop$HICOV)
+  nps_correlations[i] <- cor(in_nps, acs_pop$HICOV)
 
   if (i %% 10 == 0) {
     cat("Completed", i, "replications...\n")
