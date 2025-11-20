@@ -11,11 +11,11 @@ acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv"))
 # Convert to factor only after sampling for modeling
 
 # Draw test samples using finalized default weights
-# PS: w_wage=0.5, w_pwgt=-0.5 → DDC ≈ 0.0019 (essentially unbiased)
-ps <- get_strat_PS(pop_df = acs_pop, samp_frac = .002)
+# PS: w_wage=0.5, w_pwgt=-0.5, samp_frac=0.005 → DDC ≈ 0.0028 (essentially unbiased)
+ps <- get_strat_PS(pop_df = acs_pop, samp_frac = .005)
 
-# NPS: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE → DDC ≈ -0.093 (strong bias)
-# Effective sample size: n_eff ≈ 9 (with n ≈ 74,000)
+# NPS: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE, samp_frac=0.05 → DDC ≈ -0.093 (strong bias)
+# Effective sample size: ESS ≈ 3.2 (with n ≈ 74,000)
 nps <- get_NPS(
   pop_df = acs_pop,
   samp_frac = .05
