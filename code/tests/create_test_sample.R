@@ -6,30 +6,38 @@ source(file.path("code", "sampling_functions.R"))
 set.seed(99)
 
 # Load population file
-acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv")) %>%
+acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv"))
+# Note: Keep AGEP numeric for sampling functions that use it in weights
+# Convert to factor only after sampling for modeling
+
+# Draw test samples using finalized default weights
+# PS: w_wage=0.5, w_pwgt=-0.5 → DDC ≈ 0.0019 (essentially unbiased)
+ps <- get_strat_PS(pop_df = acs_pop, samp_frac = .002)
+
+# NPS: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE → DDC ≈ -0.093 (strong bias)
+# Effective sample size: n_eff ≈ 9 (with n ≈ 74,000)
+nps <- get_NPS(
+  pop_df = acs_pop,
+  samp_frac = .05
+  # Uses defaults: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE
+)
+
+# Extract data frames and convert categorical variables to factors for modeling
+ps_df <- acs_pop[ps$idx, ] %>%
   mutate(
-    AGEP = factor(AGEP),
+    AGEP = factor(AGEP_binned),  # Use binned version for modeling
     RAC1P = factor(RAC1P),
     SEX = factor(SEX),
     PUMA = factor(PUMA)
   )
 
-# Draw test samples
-# PS: Optimized weights for near-zero correlation with HICOV
-ps <- get_strat_PS(pop_df = acs_pop, samp_frac = .002)
-
-# NPS: Optimized weights for small positive correlation with HICOV
-# Uses default optimized weights (w_cit=25, w_wage=-10, w_pwgt=-25)
-# and reduced sample fraction (5% vs 20%) for stronger selection bias
-nps <- get_NPS(
-  pop_df = acs_pop,
-  samp_frac = .05,
-  include_internet = FALSE
-)
-
-# Extract data frames
-ps_df <- acs_pop[ps$idx, ]
-nps_df <- acs_pop[nps$idx, ]
+nps_df <- acs_pop[nps$idx, ] %>%
+  mutate(
+    AGEP = factor(AGEP_binned),  # Use binned version for modeling
+    RAC1P = factor(RAC1P),
+    SEX = factor(SEX),
+    PUMA = factor(PUMA)
+  )
 
 # Save test samples to /data
 save(ps, nps, ps_df, nps_df, file = "data/test_sample.RData")
