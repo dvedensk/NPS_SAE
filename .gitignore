@@ -1,4 +1,5 @@
 data
 .Rproj.user
 .Rproj
-nps_prior_test.R
+code/nps_prior_test.R
+code/nps_prior_logtest.R

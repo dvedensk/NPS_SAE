@@ -1,10 +1,10 @@
-library(readr)
-library(dplyr)
+# library(readr) # Redundant with tidyverse
+# library(dplyr) # Redundant with tidyverse
 library(tidyverse)
 library(sampling)
 library(mvtnorm)
 library(survey)
-library(purrr)
+# library(purrr) # Redundant with tidyverse
 library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
@@ -14,7 +14,8 @@ source(file.path("code","sampling_functions.R"))
 source(file.path("code","utils.R"))
 source(file.path("code","models","bulm.R"))
 source(file.path("code","models","VSW.R"))
-source(file.path("code","models","nps_prior.R"))
+# source(file.path("code","models","nps_prior.R"))
+source(file.path("code","models","nps_prior_log.R"))
 
 source(file.path("code","models","mrp_all.R"))
 #load .stan
@@ -36,16 +37,20 @@ set.seed(99)
 
 # load population file
 acs_pop <- read_csv(file.path("data","ACS_NPS_pop.csv")) %>%
-  mutate(AGEP = factor(AGEP),
-         RAC1P = factor(RAC1P),
-         SEX = factor(SEX),
-         PUMA = factor(PUMA))
+  mutate(
+    AGEP = factor(AGEP),
+    RAC1P = factor(RAC1P),
+    SEX = factor(SEX),
+    PUMA = factor(PUMA)
+  )
 
 # population values to compare against
 true_values <- acs_pop %>%
   group_by(PUMA) %>%
-  summarize(HICOV = mean(HICOV),
-            WAGP  = median(WAGP))
+  summarize(
+    HICOV = mean(HICOV),
+    WAGP  = median(WAGP)
+  )
 
 acs_pop_grouped <- acs_pop %>%
   group_by(PUMA, AGEP, RAC1P, SEX) %>%
@@ -148,7 +153,25 @@ for (sim in 1:Nsim) {
   bulm_ipw$model <- "bulm_ipw"
 
   # 10. Fit NPS-informed prior model (Ethan)
+
+  # HICOV = 1 means covered
+  # HICOV = 2 means not covered
+  niter <- 100
+
+  # TODO: rerun the process_population script before testing this
+  res_df <- nps_prior_mcmc(
+    ifelse(y_ps == 1, 1, 0), 
+    X_ps, 
+    ifelse(y_nps == 1, 1, 0), 
+    X_nps, 
+    niter, 
+    PUMA_levels,
+    wts = NULL, 
+    typeIerr = alpha
+) 
   
+  # Below is old, don't use
+
   # First, use nps as prior
 
   # FIXME: RAC1P4 caused (X_ps^T X_ps) to be singular 
