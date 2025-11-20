@@ -16,6 +16,22 @@ source(file.path("code","models","bulm.R"))
 source(file.path("code","models","VSW.R"))
 source(file.path("code","models","nps_prior.R"))
 
+source(file.path("code","models","mrp_all.R"))
+#load .stan
+mod <- cmdstan_model(
+  file.path("code","si2.stan"),
+  cpp_options = list(stan_threads = TRUE))
+
+modINT <- cmdstan_model(
+  file.path("code","mrp_int2.stan"),
+  cpp_options = list(stan_threads = TRUE))
+Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
+
+
+
+
+
+
 set.seed(99)
 
 # load population file
@@ -48,16 +64,16 @@ results         <- list()
 summary_df_VSW <- list()
 for (sim in 1:Nsim) {
   print(sim)
-  
+
   # 1. Draw probability and nonprobability samples
   ps  <- get_strat_PS(pop_df = acs_pop, samp_frac = .002)
   nps <- get_NPS(pop_df = acs_pop, noise_level = 2,
                  samp_frac = .1, include_internet = FALSE)
-  
+
   prob_samples[[sim]]    <- ps
   nonprob_samples[[sim]] <- nps
-  
-  # 2. Scale weights for pseudolikelihood models 
+
+  # 2. Scale weights for pseudolikelihood models
   ps_scale_weights  <- length(ps$idx)  * ps$weights  / sum(ps$weights)
   nps_scale_weights <- length(nps$idx) * nps$weights / sum(nps$weights)
 
@@ -87,8 +103,6 @@ for (sim in 1:Nsim) {
     mutate(model = "direst")
 
   # 5. BULM on probability sample
-
-
   
   # 6. Fit unit-level model on probability sample
 
@@ -111,9 +125,7 @@ for (sim in 1:Nsim) {
   # 7. Estimate IP weights for NPS
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
 
-  # 8. BULM on nonprobability sample with IPW
-
-  
+  # 8. BULM on nonprobability sample with IPW  
 
   # 9. Estimate IP weights for NPS and fit unit-level model 
   #    on nonprobability sample with them (Tracy)
@@ -170,12 +182,28 @@ for (sim in 1:Nsim) {
 
   # 11. Fit MRP (Qianyu)
   mrp=getMRP(MR=nps,
-             Ps=ps,
-             P=acs_pop)
+             ps=ps,
+             acs_pop=acs_pop)
   #  mrp_r
-  mrpr=mrp$puma_summary_mrpr[,c("PUMA","point_est","lower_CI","upper_CI","model")]
-  
+  mrpr=mrp$puma_summary_mrpr
+
   #  mrp_p
+  mrpp=mrp$puma_summary_mrpp
+
+
+  mrp1=getMRP_INT(MR=nps,
+                  ps=ps,
+                  acs_pop=acs_pop,
+                  mod = modINT)
+
+
+  #  mrp_int
+  mrpint=mrp1$puma_summary_mrpp
+
+
+
+
+  # 10. Fit VSW method (Qi)
   mrpp=mrp$puma_summary_mrpp[,c("PUMA","point_est","lower_CI","upper_CI","model")]
   
   # 12. Fit VSW method (Qi)
