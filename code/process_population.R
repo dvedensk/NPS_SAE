@@ -35,7 +35,6 @@ acs_pop <- acs_pop %>%
 
 # recode response so 0 is "No" and 1 is "Yes" and bin covariates
 # Keep AGEP, POVPIP, SSP, PERNP as continuous (unbinned) for use in sampling weights
-acs_pop_agep_continuous <- acs_pop$AGEP # Save continuous version before binning
 acs_pop <- acs_pop %>%
     mutate(
         HICOV = ifelse(HICOV == 2, 0, 1),
