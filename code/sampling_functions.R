@@ -18,7 +18,8 @@ get_strat_PS <- function(pop_df, samp_frac, weight_config = list(WAGP = 0.5, PWG
       weight_config = weight_config
     )
     weights <- c(weights, ps$weights)
-    idx <- c(idx, ps$idx)
+    # Map subset indices back to original dataframe indices
+    idx <- c(idx, puma_ids[ps$idx])
   }
   # Note: This check was previously implemented incorrectly (only checked the last PUMA in the loop).
   if (sum(weights == 1) > 0) {
