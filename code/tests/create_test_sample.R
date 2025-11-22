@@ -11,21 +11,26 @@ acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv"))
 # Convert to factor only after sampling for modeling
 
 # Draw test samples using finalized default weights
-# PS: w_wage=0.5, w_pwgt=-0.5, samp_frac=0.005 → DDC ≈ 0.0028 (essentially unbiased)
-ps <- get_strat_PS(pop_df = acs_pop, samp_frac = .005)
+# PS: WAGP=0.5, PWGTP=-0.5, samp_frac=0.005 → DDC ≈ 0.0028 (essentially unbiased) for PUBCOV
+ps <- get_strat_PS(
+  pop_df = acs_pop,
+  samp_frac = .005,
+  weight_config = list(WAGP = 0.5, PWGTP = -0.5)
+)
 
-# NPS: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE, samp_frac=0.05 → DDC ≈ -0.093 (strong bias)
-# Effective sample size: ESS ≈ 3.2 (with n ≈ 74,000)
+# NPS: PWGTP=0.2, AGEP=0.8, internet_only=FALSE, samp_frac=0.05 → DDC ≈ -0.093 (strong bias) for PUBCOV
+# Effective sample size: ESS ≈ 6.1 (with n ≈ 74,000)
 nps <- get_NPS(
   pop_df = acs_pop,
-  samp_frac = .05
-  # Uses defaults: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE
+  samp_frac = .05,
+  weight_config = list(PWGTP = 0.2, AGEP = 0.8)
+  # internet_only defaults to FALSE
 )
 
 # Extract data frames and convert categorical variables to factors for modeling
 ps_df <- acs_pop[ps$idx, ] %>%
   mutate(
-    AGEP = factor(AGEP_binned),  # Use binned version for modeling
+    AGEP_binned = factor(AGEP_binned), # Use binned version for modeling
     RAC1P = factor(RAC1P),
     SEX = factor(SEX),
     PUMA = factor(PUMA)
@@ -33,7 +38,7 @@ ps_df <- acs_pop[ps$idx, ] %>%
 
 nps_df <- acs_pop[nps$idx, ] %>%
   mutate(
-    AGEP = factor(AGEP_binned),  # Use binned version for modeling
+    AGEP_binned = factor(AGEP_binned), # Use binned version for modeling
     RAC1P = factor(RAC1P),
     SEX = factor(SEX),
     PUMA = factor(PUMA)
@@ -41,4 +46,5 @@ nps_df <- acs_pop[nps$idx, ] %>%
 
 # Save test samples to /data
 save(ps, nps, ps_df, nps_df, file = "data/test_sample.RData")
-cat("Test samples saved to data/test_sample.RData\n")
+cat("\n-------------------------------------------------\n")
+cat("\n Test samples saved to data/test_sample.RData!\n")

@@ -1,10 +1,13 @@
 # Stratified Probability Sample (PS) by PUMA
 # Recommended samp_frac: 0.005 (0.5% → ~7,378 individuals, 10x smaller than NPS)
-# Default weights: w_wage=0.5, w_pwgt=-0.5
+# Default weights: WAGP=0.5, PWGTP=-0.5 (for PUBCOV response)
 # These achieve DDC ≈ 0.0028 with PUBCOV (essentially unbiased)
 # Coverage: 99.9% of 281 PUMAs (280.9 on average)
 # Zero-variance PUMAs: ~4 (1.4%) - acceptable for small area estimation
-get_strat_PS <- function(pop_df, samp_frac, w_wage = 0.5, w_pwgt = -0.5, w_povpip = 0, w_ssp = 0, w_agep = 0) {
+#
+# weight_config: named list specifying weight variables and coefficients
+#   e.g., list(PWGTP = 0.1, AGEP = 0.5) or list(WAGP = 0.5, PWGTP = -0.5)
+get_strat_PS <- function(pop_df, samp_frac, weight_config = list(WAGP = 0.5, PWGTP = -0.5)) {
   PUMAs <- unique(pop_df$PUMA)
   weights <- idx <- c()
   for (PUMA in PUMAs) {
@@ -12,11 +15,7 @@ get_strat_PS <- function(pop_df, samp_frac, w_wage = 0.5, w_pwgt = -0.5, w_povpi
     ps <- get_PS(
       pop_df = pop_df[puma_ids, ],
       samp_frac = samp_frac,
-      w_wage = w_wage,
-      w_pwgt = w_pwgt,
-      w_povpip = w_povpip,
-      w_ssp = w_ssp,
-      w_agep = w_agep
+      weight_config = weight_config
     )
     weights <- c(weights, ps$weights)
     idx <- c(idx, ps$idx)
@@ -29,23 +28,24 @@ get_strat_PS <- function(pop_df, samp_frac, w_wage = 0.5, w_pwgt = -0.5, w_povpi
 }
 
 get_PS <- function(pop_df,
-                   # type = "PPS", # seems like this input is no longer used
                    samp_frac = .002,
-                   w_wage = 0.5,
-                   w_pwgt = -0.5,
-                   w_povpip = 0,
-                   w_ssp = 0,
-                   w_agep = 0) { # type is PPS or some other size variable
+                   weight_config = list(PWGTP = 0.1)) {
   # sets minimal sample size to 1 (higher minimums resulted in the `sum(weights == 1) > 0` check to go off
   sample_size <- max(floor(nrow(pop_df) * samp_frac), 1)
+
   # create the size variable that will be sampled in proportion to
   # (making this variable a function of the survey weights induces an informative design)
   # All variables are scaled for comparability
-  size_var <- as.numeric(exp(w_wage * scale(pop_df$WAGP) +
-    w_pwgt * scale(pop_df$PWGTP) +
-    w_povpip * scale(pop_df$POVPIP) +
-    w_ssp * scale(pop_df$SSP) +
-    w_agep * scale(pop_df$AGEP)))
+  # Build size_var dynamically from weight_config
+  linear_terms <- 0
+  for (var_name in names(weight_config)) {
+    if (!var_name %in% names(pop_df)) {
+      stop(paste0("Variable '", var_name, "' not found in pop_df"))
+    }
+    linear_terms <- linear_terms + weight_config[[var_name]] * scale(pop_df[[var_name]])
+  }
+  size_var <- as.numeric(exp(linear_terms))
+
   inclusion_probs <- inclusionprobabilities(size_var, sample_size)
   inclusion_probs <- inclusion_probs / sum(inclusion_probs) * sample_size
   # survey weights are inverse probabilities of selection
@@ -60,33 +60,36 @@ get_PS <- function(pop_df,
 
 # Non-Probability Sample (NPS)
 # Recommended samp_frac: 0.05 (5% → ~73,781 individuals, 10x larger than PS)
-# Default weights: w_pwgt=0.2, w_agep=0.8, internet_only=FALSE
+# Default weights: PWGTP=0.3, AGEP=0.7 (for PUBCOV response)
 # These achieve DDC ≈ -0.093 with PUBCOV (strong selection bias for testing bias correction)
 # Coverage: 100% of 281 PUMAs (perfect domain coverage)
 # Effective sample size: n_eff ≈ 6 (with actual n ≈ 74,000)
 # Alternative configs:
-#   - For stronger bias: w_agep=1.0 → DDC=-0.123, but n_eff=4 (extreme)
-#   - For moderate bias: w_pwgt=0.3, w_agep=0.7 → DDC=-0.048, n_eff=22
+#   - For stronger bias: AGEP=1.0 → DDC=-0.123, but n_eff=4 (extreme)
+#   - For moderate bias: PWGTP=0.3, AGEP=0.7 → DDC=-0.048, n_eff=22
 #   - With internet_only=TRUE: DDC ≈ -0.0014 (realistic but weak bias)
 # See NPS_WEIGHT_SENSITIVITY.md for full trade-off analysis
+#
+# weight_config: named list specifying weight variables and coefficients
+#   e.g., list(PWGTP = 0.3, AGEP = 0.7) or list(WAGP = 0.5)
 get_NPS <- function(pop_df,
-                    w_wage = 0,
-                    w_pwgt = 0.2,
-                    w_povpip = 0,
-                    w_ssp = 0,
-                    w_agep = 0.8,
                     samp_frac = .05,
+                    weight_config = list(PWGTP = 0.3, AGEP = 0.7),
                     internet_only = FALSE) {
   if (internet_only) {
     pop_df <- filter(pop_df, ACCESSINET < 3) # 3 indicates no access
   }
 
   # All variables are scaled for comparability
-  size_var <- as.numeric(exp(w_wage * scale(pop_df$WAGP) +
-    w_pwgt * scale(pop_df$PWGTP) +
-    w_povpip * scale(pop_df$POVPIP) +
-    w_ssp * scale(pop_df$SSP) +
-    w_agep * scale(pop_df$AGEP)))
+  # Build size_var dynamically from weight_config
+  linear_terms <- 0
+  for (var_name in names(weight_config)) {
+    if (!var_name %in% names(pop_df)) {
+      stop(paste0("Variable '", var_name, "' not found in pop_df"))
+    }
+    linear_terms <- linear_terms + weight_config[[var_name]] * scale(pop_df[[var_name]])
+  }
+  size_var <- as.numeric(exp(linear_terms))
 
   # Simple inclusion probability calculation (preserves extreme bias)
   # This approach achieves much higher DDC than inclusionprobabilities()
@@ -106,4 +109,86 @@ get_NPS <- function(pop_df,
   # return weights since we may use them for calculating properties of the sample, but
   # we will not use them as...
   return(list(weights = weights, idx = sample_idx))
+}
+
+# Calculate Sample Diagnostics (DDC and ESS)
+# Computes Data Defect Correlation (DDC) and Effective Sample Size (ESS) for both PS and NPS
+#
+# Arguments:
+#   pop_df: Full population data frame
+#   ps_sample: PS sample object from get_strat_PS() (list with idx and weights)
+#   nps_sample: NPS sample object from get_NPS() (list with idx and weights)
+#   response_var: Name of response variable (e.g., "PUBCOV", "HICOV")
+#   print_results: If TRUE, prints diagnostic summary (default: FALSE)
+#   sim_num: Simulation number for printing (optional)
+#
+# Returns:
+#   List with ps_ddc, ps_ess, nps_ddc, nps_ess
+#
+# DDC measures selection bias (correlation between inclusion and response)
+# ESS uses Meng's formula: ESS = (n_W/N) / (1 - n_W/N) * 1/rho^2
+#   where n_W = n / (1 + CV_W^2) accounts for weight variability
+calculate_sample_diagnostics <- function(pop_df,
+                                         ps_sample,
+                                         nps_sample,
+                                         response_var,
+                                         print_results = FALSE,
+                                         sim_num = NULL) {
+  # Create inclusion indicator vectors
+  in_ps <- rep(0, nrow(pop_df))
+  in_nps <- rep(0, nrow(pop_df))
+  in_ps[ps_sample$idx] <- 1
+  in_nps[nps_sample$idx] <- 1
+
+  # Calculate DDC: correlation between inclusion indicator and response variable
+  ps_ddc <- cor(in_ps, pop_df[[response_var]])
+  nps_ddc <- cor(in_nps, pop_df[[response_var]])
+
+  # Calculate ESS using Meng's formula: ESS = (n_W/N) / (1 - n_W/N) * 1/rho^2
+  # Step 1: Calculate n_W = n / (1 + CV_W^2)
+
+  # For PS (stratified): calculate per PUMA and sum
+  ps_sample_temp <- pop_df[ps_sample$idx, ]
+  ps_sample_temp$weight <- ps_sample$weights
+  ps_n_W <- ps_sample_temp %>%
+    group_by(PUMA) %>%
+    summarise(
+      n_puma = n(),
+      CV_W = sd(weight) / mean(weight),
+      n_W = n_puma / (1 + CV_W^2),
+      .groups = "drop"
+    ) %>%
+    summarise(total_n_W = sum(n_W, na.rm = TRUE)) %>%
+    pull(total_n_W)
+
+  # For NPS (not stratified): calculate overall
+  nps_sample_temp <- pop_df[nps_sample$idx, ]
+  nps_sample_temp$weight <- nps_sample$weights
+  nps_CV_W <- sd(nps_sample_temp$weight) / mean(nps_sample_temp$weight)
+  nps_n_W <- length(nps_sample$idx) / (1 + nps_CV_W^2)
+
+  # Step 2: ESS = (n_W/N) / (1 - n_W/N) * 1/rho^2
+  ps_sf_adj <- ps_n_W / nrow(pop_df)
+  ps_ess <- (ps_sf_adj / (1 - ps_sf_adj)) / (ps_ddc^2)
+
+  nps_sf_adj <- nps_n_W / nrow(pop_df)
+  nps_ess <- (nps_sf_adj / (1 - nps_sf_adj)) / (nps_ddc^2)
+
+  # Print diagnostics if requested
+  if (print_results) {
+    if (!is.null(sim_num)) {
+      cat("\n--- Sample Diagnostics (Simulation", sim_num, ") ---\n")
+    } else {
+      cat("\n--- Sample Diagnostics ---\n")
+    }
+    cat("PS:  n =", length(ps_sample$idx), "| DDC =", sprintf("%.4f", ps_ddc), "| ESS =", round(ps_ess), "\n")
+    cat("NPS: n =", length(nps_sample$idx), "| DDC =", sprintf("%.4f", nps_ddc), "| ESS =", round(nps_ess), "\n\n")
+  }
+
+  return(list(
+    ps_ddc = ps_ddc,
+    ps_ess = ps_ess,
+    nps_ddc = nps_ddc,
+    nps_ess = nps_ess
+  ))
 }
