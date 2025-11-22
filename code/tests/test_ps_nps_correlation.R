@@ -11,8 +11,8 @@ source(file.path("code", "sampling_functions.R"))
 # Response variable to analyze (must exist in ACS_NPS_pop.csv)
 RESPONSE_VAR <- "PUBCOV" # Default: PUBCOV (binary). Can also use HICOV, WAGP, etc.
 
-# PS sampling weight configuration (for PUBCOV: use WAGP=0.5, PWGTP=-0.5)
-PS_WEIGHT_CONFIG <- list(WAGP = 0.5, PWGTP = -0.5)
+# PS sampling weight configuration (for PUBCOV: use WAGP=0.05, PWGTP=-0.2)
+PS_WEIGHT_CONFIG <- list(WAGP = 0.05, PWGTP = -0.2)
 
 # NPS sampling weight configuration (for PUBCOV: use PWGTP=0.3, AGEP=0.7)
 NPS_WEIGHT_CONFIG <- list(PWGTP = 0.3, AGEP = 0.7)
