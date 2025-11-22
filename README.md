@@ -9,6 +9,7 @@ and
 https://www2.census.gov/programs-surveys/acs/data/pums/2023/5-Year/csv_hca.zip
 
 Place these in the `data` directory, then run `process_population.R` to generate the population file. The simulation logic is contained in `main.R`.
+Please run `tests/create_test_sample.R` once the population file is generated to create test samples for you to test your models on. 
 
 The code for each model resides in the `model/` directory and helper functions are in `utils.R`.
 
@@ -29,7 +30,6 @@ We take as a response the binary variable PUBCOV (public subsidized insurance co
 * race (Hispanic, white, Asian, Black, other), and
 * sex (male, female)
 
-Please run `tests/create_test_sample.R` to create test samples for you to test your models on. 
 
 The output for each model should contains the following fields
 * `model`: the name of the method
