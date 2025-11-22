@@ -127,15 +127,21 @@ for (sim in 1:Nsim) {
   ) %>% arrange(PUMA)
 
   # Extract correct columns based on response type (binary vs continuous)
+  # Check if response variable is binary (0/1) by examining unique values
+  unique_vals <- unique(acs_pop[[response_var]])
+  unique_vals <- unique_vals[!is.na(unique_vals)]
+  is_binary <- all(unique_vals %in% c(0, 1)) && length(unique_vals) <= 2
+
   all_names <- names(direst_raw)
   response_cols <- setdiff(all_names, c("PUMA", all_names[grepl("^var", all_names)]))
 
-  if (length(response_cols) > 1) {
-    # Binary: multiple columns, select TRUE
-    response_col <- response_cols[grepl("TRUE$", response_cols)]
+  if (is_binary && length(response_cols) > 1) {
+    # Binary variable with factor levels: select column ending in 1 or TRUE
+    response_col <- response_cols[grepl("(1|TRUE)$", response_cols)]
+    if (length(response_col) == 0) response_col <- response_cols[1]
     var_col <- paste0("var.", response_col)
   } else {
-    # Continuous: single column
+    # Continuous or numeric binary (0/1): single column
     response_col <- response_cols[1]
     var_col <- "var"
   }
