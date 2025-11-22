@@ -104,7 +104,9 @@ for (i in 1:N_REPS) {
     ps_design <- svydesign(ids = ~1, weights = ~design_weight, data = ps_sample)
     ps_formula <- as.formula(paste0("~", RESPONSE_VAR))
     ps_direst <- svyby(ps_formula, ~PUMA, ps_design, svymean, vartype = "var", na.rm = TRUE)
-    ps_zero_var_counts[i] <- sum(ps_direst$var == 0, na.rm = TRUE)
+    # Robustly extract variance column (handles both "var" and "var.RESPONSE_VAR" naming)
+    var_cols <- names(ps_direst)[grepl("^var", names(ps_direst))]
+    ps_zero_var_counts[i] <- sum(ps_direst[[var_cols[1]]] == 0, na.rm = TRUE)
   }
 
   if (i %% 10 == 0) {
