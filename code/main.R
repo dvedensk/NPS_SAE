@@ -39,8 +39,8 @@ response_var <- "PUBCOV" # Default: PUBCOV (binary). Can also use HICOV, WAGP, e
 # PS sampling weight configuration (for PUBCOV: use WAGP=0.5, PWGTP=-0.5)
 PS_weight_config <- list(WAGP = 0.5, PWGTP = -0.5)
 
-# NPS sampling weight configuration (for PUBCOV: use PWGTP=0.2, AGEP=0.8)
-NPS_weight_config <- list(PWGTP = 0.2, AGEP = 0.8)
+# NPS sampling weight configuration (for PUBCOV: use PWGTP=0.3, AGEP=0.7)
+NPS_weight_config <- list(PWGTP = 0.3, AGEP = 0.7)
 # ============================================================
 
 # load population file

@@ -59,14 +59,14 @@ get_PS <- function(pop_df,
 }
 
 # Non-Probability Sample (NPS)
-# Recommended samp_frac: 0.05 (5% → ~73,781 individuals, 10x larger than PS)
+# Recommended samp_frac: 0.05 (5% → ~73,000 individuals, 10x larger than PS)
 # Default weights: PWGTP=0.3, AGEP=0.7 (for PUBCOV response)
-# These achieve DDC ≈ -0.093 with PUBCOV (strong selection bias for testing bias correction)
+# These achieve DDC ≈ -0.076 with PUBCOV (strong selection bias for testing bias correction)
 # Coverage: 100% of 281 PUMAs (perfect domain coverage)
-# Effective sample size: n_eff ≈ 6 (with actual n ≈ 74,000)
+# Effective sample size: ESS ≈ 5.2 (with actual n ≈ 73,000)
 # Alternative configs:
-#   - For stronger bias: AGEP=1.0 → DDC=-0.123, but n_eff=4 (extreme)
-#   - For moderate bias: PWGTP=0.3, AGEP=0.7 → DDC=-0.048, n_eff=22
+#   - For stronger bias: PWGTP=0.2, AGEP=0.8 → DDC≈-0.093, ESS≈6
+#   - For extreme bias: PWGTP=0, AGEP=1.0 → DDC≈-0.123, ESS≈4
 #   - With internet_only=TRUE: DDC ≈ -0.0014 (realistic but weak bias)
 # See NPS_WEIGHT_SENSITIVITY.md for full trade-off analysis
 #

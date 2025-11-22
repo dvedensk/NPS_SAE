@@ -18,12 +18,12 @@ ps <- get_strat_PS(
   weight_config = list(WAGP = 0.5, PWGTP = -0.5)
 )
 
-# NPS: PWGTP=0.2, AGEP=0.8, internet_only=FALSE, samp_frac=0.05 → DDC ≈ -0.093 (strong bias) for PUBCOV
-# Effective sample size: ESS ≈ 6.1 (with n ≈ 74,000)
+# NPS: PWGTP=0.3, AGEP=0.7, internet_only=FALSE, samp_frac=0.05 → DDC ≈ -0.076 (strong bias) for PUBCOV
+# Effective sample size: ESS ≈ 5.2 (with n ≈ 73,000)
 nps <- get_NPS(
   pop_df = acs_pop,
   samp_frac = .05,
-  weight_config = list(PWGTP = 0.2, AGEP = 0.8)
+  weight_config = list(PWGTP = 0.3, AGEP = 0.7)
   # internet_only defaults to FALSE
 )
 
