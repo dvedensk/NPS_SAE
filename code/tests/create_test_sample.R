@@ -8,7 +8,7 @@ set.seed(99)
 # Load population file
 acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv"))
 # Note: Keep AGEP numeric for sampling functions that use it in weights
-# Convert to factor only after sampling for modeling
+# Convert categorical variables to factors for modeling
 
 # Draw test samples using finalized default weights
 # PS: WAGP=0.05, PWGTP=-0.2, samp_frac=0.005 → DDC ≈ 0.0007 (essentially unbiased) for PUBCOV
