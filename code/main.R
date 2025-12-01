@@ -9,6 +9,7 @@ library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
 library(matrixStats)
+library(parallelly)
 
 source(file.path("code","sampling_functions.R"))
 source(file.path("code","utils.R"))
@@ -26,7 +27,7 @@ mod <- cmdstan_model(
 modINT <- cmdstan_model(
   file.path("code","mrp_int2.stan"),
   cpp_options = list(stan_threads = TRUE))
-Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
+Sys.setenv(STAN_NUM_THREADS = availableCores() - 1) # number of threads should always be, at most, one fewer than the number of available cores (leave one for system processes.) Also, parallelly::availableCores() - 1 is safer (for example, on HPC) because it also fulfills SLURM constraints. If we do this on HPC, we can safely use availableCores() instead of availableCores() - 1.
 
 
 
@@ -71,9 +72,10 @@ for (sim in 1:Nsim) {
   print(sim)
 
   # 1. Draw probability and nonprobability samples
-  ps  <- get_strat_PS(pop_df = acs_pop, samp_frac = .002)
+  ps  <- get_strat_PS(pop_df = acs_pop, samp_frac = .002) # FIXME: Some weights were equal to 1. Adjust the informative sampling weights.
   nps <- get_NPS(pop_df = acs_pop, noise_level = 2,
-                 samp_frac = .1, include_internet = FALSE)
+                 samp_frac = .1, include_internet = FALSE) # FIXME: get_NPS(pop_df = acs_pop, noise_level = 2, samp_frac = 0.1, include_internet = FALSE) : 
+                                                          # unused argument (noise_level = 2)
 
   prob_samples[[sim]]    <- ps
   nonprob_samples[[sim]] <- nps
@@ -158,7 +160,9 @@ for (sim in 1:Nsim) {
   # HICOV = 2 means not covered
   niter <- 100
 
-  # TODO: rerun the process_population script before testing this
+  # TODO: wait to rerun this until it's confirmed that the sampling functions work again
+  # TODO: use survey::rake to make the survey weight covariate
+
   res_df <- nps_prior_mcmc(
     ifelse(y_ps == 1, 1, 0), 
     X_ps, 
