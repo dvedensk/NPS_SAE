@@ -232,7 +232,8 @@ for (sim in 1:Nsim) {
     MR = nps,
     ps = ps,
     acs_pop = acs_pop,
-    mod = modINT
+    mod = modINT,
+    adjust=T
   )
 
 
