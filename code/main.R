@@ -8,6 +8,15 @@ library(purrr)
 library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
+if (!requireNamespace("cmdstanr", quietly = TRUE)) {
+  stop("cmdstanr is required; install it via install.packages('cmdstanr').")
+}
+library(cmdstanr)
+# Validate CmdStan is discoverable; cmdstanr 0.9.0 lacks cmdstan_available()
+tryCatch(
+  cmdstanr::cmdstan_path(),
+  error = function(e) stop("CmdStan is not installed or toolchain is unavailable; run cmdstanr::install_cmdstan().")
+)
 
 source(file.path("code", "sampling_functions.R"))
 source(file.path("code", "utils.R")) # utils.R must define estimate_ipw()
@@ -15,17 +24,25 @@ source(file.path("code", "models", "bulm.R"))
 source(file.path("code", "models", "VSW.R"))
 
 source(file.path("code", "models", "mrp_all.R"))
-# load .stan
-mod <- cmdstan_model(
-  file.path("code", "si2.stan"),
-  cpp_options = list(stan_threads = TRUE)
-)
+# load .stan if available (allows running non-Stan paths without failure)
+stan_si2 <- file.path("code", "models", "si2.stan")
+stan_mrp_int2 <- file.path("code", "models", "mrp_int2.stan")
+stan_models_available <- file.exists(stan_si2) && file.exists(stan_mrp_int2)
+if (!stan_models_available) {
+  warning("Stan model files not found; skipping Stan compilation and Stan-based models.")
+  mod <- modINT <- NULL
+} else {
+  mod <- cmdstan_model(
+    stan_si2,
+    cpp_options = list(stan_threads = TRUE)
+  )
 
-modINT <- cmdstan_model(
-  file.path("code", "mrp_int2.stan"),
-  cpp_options = list(stan_threads = TRUE)
-)
-Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
+  modINT <- cmdstan_model(
+    stan_mrp_int2,
+    cpp_options = list(stan_threads = TRUE)
+  )
+  Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
+}
 
 
 set.seed(99)
@@ -35,6 +52,7 @@ set.seed(99)
 # ============================================================
 # Response variable to analyze (must exist in ACS_NPS_pop.csv)
 response_var <- "PUBCOV" # Default: PUBCOV (binary). Can also use HICOV, WAGP, etc.
+response_type <- "binary" # PUBCOV is 0/1 in processed population
 
 # PS sampling weight configuration (for PUBCOV: use WAGP=0.05, PWGTP=-0.2)
 PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
@@ -69,6 +87,16 @@ X_formula <- as.formula("~ AGEP_binned + RAC1P + SEX")
 Psi_formula <- as.formula("~ -1 + PUMA")
 
 alpha <- .05
+N_pop <- nrow(acs_pop)
+pop_mean <- mean(acs_pop[[response_var]], na.rm = TRUE)
+cat(
+  "\nPopulation summary:",
+  "\n- N =", N_pop,
+  "\n- Response mean (", response_var, ") =", round(pop_mean, 4),
+  "\n- PS weights:", paste(names(PS_weight_config), PS_weight_config, sep = "=", collapse = ", "),
+  "\n- NPS weights:", paste(names(NPS_weight_config), NPS_weight_config, sep = "=", collapse = ", "),
+  "\n\n"
+)
 
 # take samples
 Nsim <- 1
@@ -80,29 +108,34 @@ for (sim in 1:Nsim) {
   print(sim)
 
   # 1. Draw probability and nonprobability samples
-  ps <- get_strat_PS(pop_df = acs_pop, samp_frac = .005, weight_config = PS_weight_config)
-  nps <- get_NPS(pop_df = acs_pop, samp_frac = .05, weight_config = NPS_weight_config, internet_only = FALSE)
+  ps_sample <- get_strat_PS(pop_df = acs_pop, samp_frac = .005, weight_config = PS_weight_config)
+  nps_sample <- get_NPS(pop_df = acs_pop, samp_frac = .05, weight_config = NPS_weight_config, internet_only = FALSE)
 
-  prob_samples[[sim]] <- ps
-  nonprob_samples[[sim]] <- nps
+  # save the samples
+  prob_samples[[sim]] <- ps_sample
+  nonprob_samples[[sim]] <- nps_sample
+
+  # check the PS weights
+  cat("PS weight Check: sum(ps_weights) =", sum(ps_sample$weights), "vs N_pop =", N_pop, "\n")
 
   # Calculate and print sample diagnostics (DDC and ESS)
   diagnostics <- calculate_sample_diagnostics(
     pop_df = acs_pop,
-    ps_sample = ps,
-    nps_sample = nps,
+    ps_sample = ps_sample,
+    nps_sample = nps_sample,
     response_var = response_var,
     print_results = TRUE,
     sim_num = sim
   )
 
   # 2. Scale weights for pseudolikelihood models
-  ps_scale_weights <- length(ps$idx) * ps$weights / sum(ps$weights)
-  nps_scale_weights <- length(nps$idx) * nps$weights / sum(nps$weights)
+  ps_scale_weights <- length(ps_sample$idx) * ps_sample$weights / sum(ps_sample$weights)
+  nps_scale_weights <- length(nps_sample$idx) * nps_sample$weights / sum(nps_sample$weights)
 
   # 3. Extract PS and NPS data frames
-  ps <- acs_pop[ps$idx, ]
-  nps <- acs_pop[nps$idx, ]
+  ps <- acs_pop[ps_sample$idx, ] %>%
+    mutate(sample_weight = ps_sample$weights)
+  nps <- acs_pop[nps_sample$idx, ]
 
   # 4. Build design matrices for PS and NPS separately
   X_ps <- model.matrix(X_formula, data = ps)
@@ -114,48 +147,26 @@ for (sim in 1:Nsim) {
   y_nps <- nps[[response_var]]
 
   # 5. Direct estimate on probability sample
-  samp.design <- svydesign(ids = ~1, weights = ~PWGTP, data = ps)
+  samp.design <- svydesign(ids = ~1, weights = ~sample_weight, data = ps)
 
-  # svyby extraction: handle both binary and continuous responses
-  direst_raw <- svyby(
+  # svyby extraction: use built-in se to avoid manual column juggling
+  direst <- svyby(
     as.formula(paste0("~", response_var)),
     ~PUMA,
     samp.design,
     svymean,
-    vartype = "var",
-    na.rm = TRUE
-  ) %>% arrange(PUMA)
-
-  # Extract correct columns based on response type (binary vs continuous)
-  # Check if response variable is binary (0/1) by examining unique values
-  unique_vals <- unique(acs_pop[[response_var]])
-  unique_vals <- unique_vals[!is.na(unique_vals)]
-  is_binary <- all(unique_vals %in% c(0, 1)) && length(unique_vals) <= 2
-
-  all_names <- names(direst_raw)
-  response_cols <- setdiff(all_names, c("PUMA", all_names[grepl("^var", all_names)]))
-
-  if (is_binary && length(response_cols) > 1) {
-    # Binary variable with factor levels: select column ending in 1 or TRUE
-    response_col <- response_cols[grepl("(1|TRUE)$", response_cols)]
-    if (length(response_col) == 0) response_col <- response_cols[1]
-    var_col <- paste0("var.", response_col)
-  } else {
-    # Continuous or numeric binary (0/1): single column
-    response_col <- response_cols[1]
-    var_col <- "var"
-  }
-
-  direst <- direst_raw %>%
-    mutate(
-      point_est = .data[[response_col]],
-      se = sqrt(.data[[var_col]]),
+    na.rm = TRUE,
+    vartype = "se",
+    keep.names = FALSE
+  ) %>%
+    arrange(PUMA) %>%
+    transmute(
+      PUMA,
+      point_est = .data[[response_var]], # pulling the mean column from svyby
       lower_CI = point_est + qnorm(alpha / 2) * se,
       upper_CI = point_est + qnorm(1 - alpha / 2) * se,
       model = "direst"
-    ) %>%
-    select(PUMA, point_est, lower_CI, upper_CI, model)
-
+    )
 
 
   # 6. Fit unit-level model on probability sample
@@ -175,7 +186,6 @@ for (sim in 1:Nsim) {
     summaries      = TRUE
   )
   bulm_out$model <- "bulm"
-
 
   # 7. Estimate IP weights for NPS and fit unit-level model
   #    on nonprobability sample with them (Tracy)
