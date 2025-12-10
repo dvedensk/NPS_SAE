@@ -12,7 +12,7 @@ acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv"))
 
 # Draw test samples using finalized default weights
 # PS: WAGP=0.05, PWGTP=-0.2, samp_frac=0.005 → DDC ≈ 0.0007 (essentially unbiased) for PUBCOV
-ps <- get_strat_PS(
+ps1 <- get_strat_PS(
   pop_df = acs_pop,
   samp_frac = .005,
   weight_config = list(WAGP = 0.05, PWGTP = -0.2)
