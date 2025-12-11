@@ -102,6 +102,7 @@ getMRP=function(MR=nps,
                 acs_pop=acs_pop,
                 WFPBB=FALSE,
                 L=5){
+  ps$PWGTP<-ps$weights
   
   # TRAINING DATA ----
   nps_ca <- MR  # nps
@@ -432,6 +433,7 @@ getMRP_INT <- function(MR,
 ) {
   
   
+  ps$PWGTP<-ps$weights
   
   
   psi_eps = 1e-6
