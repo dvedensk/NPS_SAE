@@ -134,7 +134,7 @@ for (sim in 1:Nsim) {
 
   # 3. Extract PS and NPS data frames
   ps <- acs_pop[ps_sample$idx, ] %>%
-    mutate(sample_weight = ps_sample$weights)
+    mutate(weights = ps_sample$weights)
   nps <- acs_pop[nps_sample$idx, ]
 
   # 4. Build design matrices for PS and NPS separately
