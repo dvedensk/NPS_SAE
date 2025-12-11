@@ -187,10 +187,22 @@ for (sim in 1:Nsim) {
   )
   bulm_out$model <- "bulm"
 
-  # 7. Estimate IP weights for NPS and fit unit-level model
-  #    on nonprobability sample with them (Tracy)
-  ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula)
+  # 6. Build design matrices for NPS
+  X_nps   <- model.matrix(X_formula,   data = nps)
+  Psi_nps <- model.matrix(Psi_formula, data = nps)
+  y_nps   <- nps$HICOV
 
+  # 7. Estimate IP weights for NPS
+  ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula,
+                      method="ignorable")
+
+  # 7b. rescale normalized so that #the weighted fraction of the nonprobability 
+  #     sample is equal to the unweighted fraction of the nonprobability sample 
+  #     cases in the combined dataset, and similarly the weighted fraction of 
+  #     the probability sample is equal to the unweighted fraction of the probability
+  #     sample cases in the combined dataset
+  
+  # 8. BULM on nonprobability sample with IPW
 
   bulm_ipw <- bulm_results(
     grouped_pop_df = acs_pop_grouped,
