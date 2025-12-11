@@ -147,7 +147,7 @@ for (sim in 1:Nsim) {
   y_nps <- nps[[response_var]]
 
   # 5. Direct estimate on probability sample
-  samp.design <- svydesign(ids = ~1, weights = ~sample_weight, data = ps)
+  samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps)
 
   # svyby extraction: use built-in se to avoid manual column juggling
   direst <- svyby(
