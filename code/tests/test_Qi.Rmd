@@ -14,23 +14,23 @@ This document summarizes the methodological framework proposed in *Aliste, Schol
 # Method Summary
 
 The goal is to estimate the proportions  
-\[
+$$
 Z_{kc}, \qquad k = 1,\ldots, K,\; c = 1,\ldots, C,
-\]
-where \(Z_{kc}\) denotes the proportion of units in domain \(k\) that belong to category \(c\).
+$$
+where $Z_{kc}$ denotes the proportion of units in domain $k$ that belong to category $c$.
 
 ---
 
 # 1. Population Structure and Targets
 
-The population consists of \(N\) units divided into \(K\) domains.  
-- \(N_k\): number of units in domain \(k\)  
-- \(y_i \in \{1,\ldots, C\}\): categorical variable of interest  
-- \(Z_{kc}\): true proportion of category \(c\) in domain \(k\)
+The population consists of $N$ units divided into $K$ domains.  
+- $N_k$: number of units in domain $k$  
+- $y_i \in \{1,\ldots, C\}$: categorical variable of interest  
+- $Z_{kc}$: true proportion of category $c$ in domain $k$
 
-\[
+$$
 Z_{kc} = \frac{1}{N_k} \sum_{i \in U_k} I(y_i = c).
-\]
+$$
 
 ---
 
@@ -39,68 +39,68 @@ Z_{kc} = \frac{1}{N_k} \sum_{i \in U_k} I(y_i = c).
 Two samples are available:
 
 ### Probability sample (small)
-- Denoted \(\mathcal{S}^{(P)}\)  
-- Domain-specific sample size: \(n^{(P)}_k\)  
-- Estimator of \(Z_{kc}\):
-\[
+- Denoted $\mathcal{S}^{(P)}$  
+- Domain-specific sample size: $n^{(P)}_k$  
+- Estimator of $Z_{kc}$:
+$$
 \hat{Z}^{(P)}_{kc}.
-\]
+$$
 
 ### Nonprobability sample (large)
-- Denoted \(\mathcal{S}^{(NP)}\)  
-- Domain-specific sample size: \(n^{(NP)}_k\)  
-- Estimator of \(Z_{kc}\):
-\[
+- Denoted $\mathcal{S}^{(NP)}$  
+- Domain-specific sample size: $n^{(NP)}_k$  
+- Estimator of $Z_{kc}$:
+$$
 \hat{Z}^{(NP)}_{kc}.
-\]
+$$
 
-Both estimators are obtained by directly computing the sample proportion of category \(c\) within domain \(k\).
+Both estimators are obtained by directly computing the sample proportion of category $c$ within domain $k$.
 
 ---
 
 # 3. Bias Model for the Nonprobability Estimator
 
 The bias of the nonprobability estimator is defined as  
-\[
+$$
 b_{kc} = E_d(\hat{Z}^{(NP)}_{kc}) - Z_{kc}. \tag{5}
-\]
+$$
 
 A simple random-effects model is adopted:
-\[
+$$
 E_b(b_{kc}) = \beta_c,\qquad
 E_b[(b_{kc} - \beta_c)^2] = \sigma^2,
-\]
+$$
 with the constraint
-\[
+$$
 \sum_{c=1}^C b_{kc} = 0
 \quad\text{and}\quad
 \sum_{c=1}^C \beta_c = 0.
 \tag{6}
-\]
+$$
 
 Further definitions:
-- \(\beta_c\): expected bias for category \(c\)  
-- \(\sigma^2\): variance of the bias term  
-- \(E_b(\cdot)\): expectation under the bias model  
-- \(E_d(\cdot)\): expectation under the sampling design  
-- \(\tilde{Z}_{kc} = E_d(\hat{Z}^{(NP)}_{kc})\)  
-- \(v_{kc} = E_b E_d [\hat{Z}^{(NP)}_{kc}(1 - \hat{Z}^{(NP)}_{kc})]\)
+- $\beta_c$: expected bias for category $c$  
+- $\sigma^2$: variance of the bias term  
+- $E_b(\cdot)$: expectation under the bias model  
+- $E_d(\cdot)$: expectation under the sampling design  
+- $\tilde{Z}_{kc} = E_d(\hat{Z}^{(NP)}_{kc})$  
+- $v_{kc} = E_b E_d [\hat{Z}^{(NP)}_{kc}(1 - \hat{Z}^{(NP)}_{kc})]$
 
 ---
 
 # 4. EMSE of the Two Estimators
 
 For the nonprobability estimator:
-\[
+$$
 EMSE(\hat{Z}^{(NP)}_{kc})
 =
 \beta_c^2 + \sigma^2
 + \frac{v_{kc}}{n^{(NP)}_k - 1}.
 \tag{7}
-\]
+$$
 
 For the probability estimator:
-\[
+$$
 EMSE(\hat{Z}^{(P)}_{kc})
 =
 \frac{1}{n^{(P)}_k}
@@ -111,24 +111,24 @@ EMSE(\hat{Z}^{(P)}_{kc})
 - \sigma^2
 \right].
 \tag{8}
-\]
+$$
 
 ---
 
 # 5. Final Weight Expression
 
 The combined estimator takes the form
-\[
+$$
 \hat{D}_{kc}
 =
 W_{kc}\hat{Z}^{(P)}_{kc}
 +
 (1 - W_{kc})\hat{Z}^{(NP)}_{kc}.
 \tag{3}
-\]
+$$
 
 The optimal weight is given by
-\[
+$$
 W_{kc}
 =
 \frac{
@@ -143,47 +143,47 @@ W_{kc}
 \beta_c \left[ 2E_b(\tilde{Z}_{kc}) - 1 \right]
 }.
 \tag{9}
-\]
+$$
 
 ---
 
 # 6. Estimating the Model Parameters
 
-### (a) Estimating \(\beta_c\)
-\[
+### (a) Estimating $\beta_c$
+$$
 \hat{\beta}_c
 =
 \frac{1}{K}
 \sum_{k=1}^K
 (\hat{Z}^{(NP)}_{kc} - \hat{Z}^{(P)}_{kc}).
 \tag{10}
-\]
+$$
 
-### (b) Estimating \(\sigma^2\)
-\[
+### (b) Estimating $\sigma^2$
+$$
 \hat{\sigma}^2
 =
 \frac{1}{(K-1)C}
 \sum_{k=1}^K\sum_{c=1}^C
 (\hat{Z}^{(NP)}_{kc} - \hat{Z}^{(P)}_{kc} - \hat{\beta}_c)^2.
 \tag{11}
-\]
+$$
 
-### (c) Estimating \(v_{kc}\)
-\[
+### (c) Estimating $v_{kc}$
+$$
 \hat{v}_{kc}
 =
 \hat{Z}^{(NP)}_{kc}\left(1 - \hat{Z}^{(NP)}_{kc}\right).
 \tag{12}
-\]
+$$
 
 ---
 
 # 7. Final Combined Estimator
 
-With  \(\hat{\beta}_c\),  \(\hat{\sigma}^2\),  \(\hat{v}_{kc}\),and \(\hat{W}_{kc}\) computed using (9), the final estimator is
+With  $\hat{\beta}_c$,  $\hat{\sigma}^2$,  $\hat{v}_{kc}$,and $\hat{W}_{kc}$ computed using (9), the final estimator is
 
-\[
+$$
 \boxed{
 \hat{D}_{kc}
 =
@@ -191,7 +191,7 @@ With  \(\hat{\beta}_c\),  \(\hat{\sigma}^2\),  \(\hat{v}_{kc}\),and \(\hat{W}_{k
 +
 (1 - \hat{W}_{kc})\hat{Z}^{(NP)}_{kc}.
 }
-\]
+$$
 
 This completes the method.
 
