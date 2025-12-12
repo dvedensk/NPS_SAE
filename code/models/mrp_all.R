@@ -92,7 +92,7 @@ make_summary <- function(draw_mat, puma_names, tag) {
 # ---------- 5) getMRP---------- 
 # Load compiled Stan models
 mod <- cmdstan_model(
-  file.path("/Users/qianyudong/Dropbox/simulation/code", "si2_1111.stan"),
+  file.path("code", "models", "si2.stan"),
   cpp_options = list(stan_threads = TRUE))
 
 
@@ -419,7 +419,7 @@ poststrat_int_SxJ <- function(beta,
 }
 
 mod <- cmdstan_model(
-  file.path("/Users/qianyudong/Dropbox/simulation/code", "mrp_int2_1111.stan"),
+  file.path("code", "models", "mrp_int2.stan"),
   cpp_options = list(stan_threads = TRUE),
   force_recompile = TRUE
 )
