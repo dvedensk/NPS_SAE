@@ -41,7 +41,7 @@ cat("✓ Samples regenerated\n")
 data.frame(
   Sample = c("Population", "PS", "NPS"),
   N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
-  HICOV_Rate = c(mean(acs_pop$HICOV), mean(ps_df$HICOV), mean(nps_df$HICOV))
+  HICOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
 )
 ```
 

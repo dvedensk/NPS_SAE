@@ -3,3 +3,4 @@ data
 .Rproj
 *.Rproj
 .Rhistory
+.DS_Store
