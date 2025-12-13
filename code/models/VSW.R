@@ -1,32 +1,31 @@
-
 vsw_out <- function(ps, nps, X_formula, response){
   # 3. Build design matrices for PS
-  X_ps   <- model.matrix(X_formula,   data = ps)
-  X_nps <- model.matrix(X_formula, data = nps)
+  # X_ps   <- model.matrix(X_formula,   data = ps)
+  # X_nps <- model.matrix(X_formula, data = nps)
   y_ps  <- ps[[response]]
   y_nps <- nps[[response]]
   
   all_dat <- rbind(ps, nps)
-  X_all <- model.matrix(X_formula, data = all_dat)
+  # X_all <- model.matrix(X_formula, data = all_dat)
   y_all <- all_dat[[response]]
   
   
   #fit models here:
-  model_ps <- glm(y_ps~X_ps, family = binomial(link = "logit"))
-  model_nps <- glm(y_nps~X_nps, family = binomial(link = "logit"), data = nps)
-  model_all <- glm(y_all~X_all, family = binomial(link = "logit"), data = all_dat)
+  # model_ps <- glm(y_ps~X_ps, family = binomial(link = "logit"))
+  # model_nps <- glm(y_nps~X_nps, family = binomial(link = "logit"), data = nps)
+  # model_all <- glm(y_all~X_all, family = binomial(link = "logit"), data = all_dat)
   
   z_hat_pool <- data.frame(
-    "PUMA" = all_dat$PUMA, "prediction" = predict(model_all, type = "response")
+    "PUMA" = all_dat$PUMA, "prediction" = all_dat[[response]]
   ) %>% group_by(PUMA) %>% summarise(Z_k1 = mean(prediction), Z_k0 = 1-mean(prediction))
   
   
   Z_hat_ps <- data.frame(
-    "PUMA" = ps$PUMA, "prediction" = predict(model_ps, type = "response")
+    "PUMA" = ps$PUMA, "prediction" = ps[[response]]
   ) %>% group_by(PUMA) %>% summarise(Z_k1 = mean(prediction), Z_k0 = 1-mean(prediction)) 
   
   Z_hat_nps <- data.frame(
-    "PUMA" = nps$PUMA, "prediction" = predict(model_nps, type = "response")
+    "PUMA" = nps$PUMA, "prediction" = nps[[response]]
   ) %>% group_by(PUMA) %>% summarise(Z_k1 = mean(prediction), Z_k0 = 1-mean(prediction)) 
   
   Z_combined <- Z_hat_ps %>%
