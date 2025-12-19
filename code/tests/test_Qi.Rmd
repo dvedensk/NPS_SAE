@@ -5,6 +5,10 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=FALSE, warning=FALSE)
+```
+
 # Summary
 
 This document summarizes the methodological framework proposed in *Aliste, Scholtus & De Waal (2025)* for combining probability and nonprobability samples at an aggregated level. The approach produces improved estimators for domain-by-category proportions by balancing the bias of the nonprobability sample with the variance of the probability sample.
@@ -287,6 +291,7 @@ acs_pop <- read_csv(here::here(file.path("data", "ACS_NPS_pop.csv"))) %>%
 
 X_formula <- as.formula("~ AGEP_binned + RAC1P + SEX")
 load(here::here("data/test_sample.RData"))
+ps_weights <- ps$weights  # Save weights before overwriting ps
 ps <- acs_pop[ps$idx, ]
 nps <- acs_pop[nps$idx, ]
 response <- "PUBCOV" # Default: PUBCOV (binary). Can also use HICOV, WAGP, etc.
@@ -295,7 +300,105 @@ response <- "PUBCOV" # Default: PUBCOV (binary). Can also use HICOV, WAGP, etc.
 
 result_VSW <- vsw_out(ps, nps, X_formula, response = response) # a vector of 4, (mse, mab, cr, is)
 
-print(result_VSW)  
+result_VSW %>% head()
 ```
 
+# Performance Comparison
+
+## Calculate True Values and Direct Estimates
+
+```{r true-values}
+library(survey)
+
+# Calculate true population values by PUMA (what we're trying to estimate)
+response_var <- response  # Use the same response variable as above
+alpha <- 0.05
+
+true_values <- acs_pop %>%
+  group_by(PUMA) %>%
+  summarize(
+    response_true = mean(.data[[response_var]], na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r direct-estimates}
+# Add weights to PS sample (from test_sample.RData, ps contains weights)
+ps_df <- ps %>%
+  mutate(weights = ps_weights)
+
+# Create survey design
+samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps_df)
+
+# Calculate direct estimates by PUMA with standard errors
+direst <- svyby(
+  as.formula(paste0("~", response_var)),
+  ~PUMA,
+  samp.design,
+  svymean,
+  na.rm = TRUE,
+  vartype = "se",
+  keep.names = FALSE
+) %>%
+  arrange(PUMA) %>%
+  transmute(
+    PUMA,
+    point_est = .data[[response_var]],
+    lower_CI = point_est + qnorm(alpha / 2) * se,
+    upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+    model = "direst"
+  )
+```
+
+## Calculate Performance Metrics
+
+```{r performance-metrics}
+# Helper function for interval score (from main.R)
+int_score <- function(alpha, y, lower, upper) {
+  (upper - lower) +
+    (2 / alpha) * (lower - y) * (y < lower) +
+    (2 / alpha) * (y - upper) * (y > upper)
+}
+
+# Combine VSW results with direct estimates
+all_results <- bind_rows(direst, result_VSW %>% rename(point_est = VSW_point_est))
+
+# Calculate performance metrics for all models
+performance_metrics <- true_values %>%
+  left_join(all_results, by = "PUMA") %>%
+  group_by(model) %>%
+  summarize(
+    MSE = mean((response_true - point_est)^2),
+    MAB = mean(abs(response_true - point_est)),
+    Coverage = mean(between(response_true, lower_CI, upper_CI), na.rm = TRUE),
+    `Int. Score` = mean(int_score(alpha, response_true, lower_CI, upper_CI), na.rm = TRUE),
+    .groups = "drop"
+  )
+
+performance_metrics
+```
+
+## Visualize Estimates vs Truth
+
+```{r visualize}
+library(ggplot2)
+
+# Plot estimates vs truth for direct estimates and VSW method
+plot_data <- true_values %>%
+  left_join(all_results, by = "PUMA")
+
+ggplot(plot_data,
+       aes(x = response_true, y = point_est, color = model)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), alpha = 0.3, width = 0.02) +
+  labs(
+    title = paste("Estimates vs True PUMA Values -", response_var),
+    x = "True Rate",
+    y = "Estimated Rate",
+    color = "Method"
+  ) +
+  facet_wrap(~model) +
+  theme_minimal()
+```
 
