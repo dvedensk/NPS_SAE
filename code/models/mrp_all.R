@@ -91,10 +91,10 @@ make_summary <- function(draw_mat, puma_names, tag) {
 
 # ---------- 5) getMRP---------- 
 # Load compiled Stan models
-mod <- cmdstan_model(
-  file.path("/Users/qianyudong/Dropbox/simulation/code", "si2_1111.stan"),
-  cpp_options = list(stan_threads = TRUE))
-
+# mod <- cmdstan_model(
+#   here("code/models", "si2_1111.stan"),
+#   cpp_options = list(stan_threads = TRUE))
+# 
 
 
 getMRP=function(MR=nps,
@@ -152,18 +152,32 @@ getMRP=function(MR=nps,
     seed = 123
   )
   
-  sum_tbl <- fit$summary()
-  # fit_glm <- rstanarm::stan_glm(
-  #   HICOV ~ 0 + AGEP + SEX + RAC1P,    
+  # sum_tbl <- fit$summary()
+  # fit_glm <- rstanarm::stan_glmer(
+  #   PUBCOV ~ 0 + AGEP_binned + SEX + RAC1P+ (1|PUMA),
   #   data   = nps_ca,
   #   family = binomial(link = "logit"),
   #   chains = 2,
-  #   iter   = 1500,  
+  #   iter   = 1500,
   #   warmup = 500,
   #   cores  = 2,
   #   seed   = 123
   # )
-  # takes 72s. 
+  
+  
+#formula:  PUBCOV ~ 0 + AGEP_binned + SEX + RAC1P
+# Estimates:
+#                      mean   sd   10%   50%   90%
+# AGEP_binned[0,18)    0.6    0.1  0.5   0.6   0.7 
+# AGEP_binned[18,34)   1.4    0.0  1.3   1.4   1.4 
+# AGEP_binned[34,65)   1.5    0.0  1.5   1.5   1.5 
+# AGEP_binned[65,Inf) -2.9    0.0 -2.9  -2.9  -2.8 
+# SEXMale              0.1    0.0  0.1   0.1   0.2 
+# RAC1PBlack          -0.7    0.1 -0.8  -0.7  -0.6 
+# RAC1PHispanic       -0.6    0.0 -0.6  -0.6  -0.6 
+# RAC1POther          -0.3    0.1 -0.4  -0.3  -0.2 
+# RAC1PWhite          -0.1    0.0 -0.2  -0.1  -0.1 
+# takes 33.691
   
 
   
@@ -418,11 +432,11 @@ poststrat_int_SxJ <- function(beta,
   mu
 }
 
-mod <- cmdstan_model(
-  file.path("/Users/qianyudong/Dropbox/simulation/code", "mrp_int2_1111.stan"),
-  cpp_options = list(stan_threads = TRUE),
-  force_recompile = TRUE
-)
+# mod <- cmdstan_model(
+#   here("code/models", "mrp_int2_1111.stan"),
+#   cpp_options = list(stan_threads = TRUE),
+#   force_recompile = TRUE
+# )
 
 # ---------- 4) getMRP_INT---------- 
 getMRP_INT <- function(MR,
