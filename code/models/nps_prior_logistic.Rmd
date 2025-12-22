@@ -117,7 +117,10 @@ mixed_dist_mcmc <- function(
         
         # Invert for covariance Cholesky factor
         cov_L <- forwardsolve(post_prec_L, diag(p))
-        post_mn <- as.numeric(tcrossprod(cov_L) %*% (crossprod(X, kappas) + prior_prec %*% beta_NP_hat))
+        post_mn <- as.numeric(
+            tcrossprod(cov_L) %*% 
+            (crossprod(X, kappas) + prior_prec %*% beta_NP_hat)
+        )
         
         # Draw by scaling and shifting standard normals
         bet <- as.numeric(cov_L %*% rnorm(p) + post_mn)
@@ -545,8 +548,8 @@ nps_prior_mcmc <- function(
         typeIerr
     )
 
-    # for mixed-distance-log priors, we estimate the variance of the MLE of each coefficient
-    # based on the NPS 
+    # for mixed-distance-log priors, we estimate the variance of the MLE 
+    # of each coefficient based on the NPS 
     NP_vars <- glm_fit_NP %>% 
         vcov() %>% 
         diag() %>% 

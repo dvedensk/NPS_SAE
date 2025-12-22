@@ -22,8 +22,8 @@ source(file.path(models_path, "VSW.R"))
 # (effectively sources the R code chunks)
 render(
   file.path(models_path, "nps_prior_logistic.Rmd"), 
-  output_format = "html_document", 
-  output_file = "nps_prior_logistic.html",
+  output_format = "pdf_document", 
+  output_file = "nps_prior_logistic.pdf",
   output_dir = models_path,
   envir = globalenv(), 
   quiet = TRUE
