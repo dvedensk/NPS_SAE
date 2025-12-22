@@ -252,7 +252,7 @@ for (sim in 1:Nsim) {
     direst,
     bulm_out,
     bulm_ipw,
-    result_VSW,
+    VSW_out,
     mrpr,
     mrprp
   )
