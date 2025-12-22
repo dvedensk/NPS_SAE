@@ -1,5 +1,7 @@
 data
 .Rproj.user
 .Rproj
-code/nps_prior_test.R
-code/nps_prior_logtest.R
+code/tests/nps_prior_test.R
+code/tests/nps_prior_logtest.R
+code/models/si2
+code/models/mrp_int2

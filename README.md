@@ -37,3 +37,18 @@ The output for each model should contains the following fields
 * `point_est`: a point estimate of the proportion of HICOV by PUMA
 * `lower_CI`: the lower CI bound at confidence level `alpha` (this parameter is set in main.R)
 * `upper_CI`: the upper CI bound at confidence level `alpha`
+
+# Dependencies
+
+- `tidyverse`
+- `sampling`
+- `mvtnorm`
+- `survey`
+- `BayesLogit`
+- `Matrix`
+- `LaplacesDemon`
+- `matrixStats`
+- `parallelly`
+- `cmdstanr`
+- `rstanarm`
+- `brms`

@@ -5,32 +5,46 @@ library(sampling)
 library(mvtnorm)
 library(survey)
 # library(purrr) # Redundant with tidyverse
-library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
-library(matrixStats)
 library(parallelly)
+library(cmdstanr)
+library(rmarkdown)
 
-source(file.path("code","sampling_functions.R"))
-source(file.path("code","utils.R"))
-source(file.path("code","models","bulm.R"))
-source(file.path("code","models","VSW.R"))
-# source(file.path("code","models","nps_prior.R"))
-source(file.path("code","models","nps_prior_log.R"))
+models_path <- file.path("code", "models")
 
-source(file.path("code", "models", "mrp_all.R"))
+source(file.path("code", "sampling_functions.R"))
+source(file.path("code", "utils.R"))
+source(file.path(models_path, "bulm.R"))
+source(file.path(models_path, "VSW.R"))
+
+# Render the Rmd file in the global environment 
+# (effectively sources the R code chunks)
+render(
+  file.path(models_path, "nps_prior_logistic.Rmd"), 
+  output_format = "html_document", 
+  output_file = "nps_prior_logistic.html",
+  output_dir = models_path,
+  envir = globalenv(), 
+  quiet = TRUE
+) %>% 
+  suppressWarnings() # Don't throw deprecation warnings
+
+source(file.path(models_path, "mrp_all.R"))
 # load .stan
 mod <- cmdstan_model(
-  file.path("code", "si2.stan"),
+  file.path(models_path, "si2.stan"),
   cpp_options = list(stan_threads = TRUE)
 )
 
 modINT <- cmdstan_model(
-  file.path("code","mrp_int2.stan"),
+  file.path(models_path, "mrp_int2.stan"),
   cpp_options = list(stan_threads = TRUE)
 )
-Sys.setenv(STAN_NUM_THREADS = availableCores() - 1) # number of threads should always be, at most, one fewer than the number of available cores (leave one for system processes.) Also, parallelly::availableCores() - 1 is safer (for example, on HPC) because it also fulfills SLURM constraints. If we do this on HPC, we can safely use availableCores() instead of availableCores() - 1.
 
+Sys.setenv(STAN_NUM_THREADS = availableCores() - 1) # number of threads should always be, at most, one fewer than the number of available cores (leave one for system processes.) 
+# Also, parallelly::availableCores() - 1 is safer (for example, on HPC) because it also fulfills SLURM constraints. 
+# If we do this on HPC, we can safely use availableCores() instead of availableCores() - 1.
 
 set.seed(99)
 
@@ -206,57 +220,20 @@ for (sim in 1:Nsim) {
 
   # 10. Fit NPS-informed prior model (Ethan)
 
-  # HICOV = 1 means covered
-  # HICOV = 2 means not covered
-  niter <- 100
-
-  # TODO: wait to rerun this until it's confirmed that the sampling functions work again
   # TODO: use survey::rake to make the survey weight covariate
+  # TODO: check mixing; try other PG sampler packages; if nothing else, use Stan for power prior 
 
-  res_df <- nps_prior_mcmc(
-    ifelse(y_ps == 1, 1, 0), 
-    X_ps, 
-    ifelse(y_nps == 1, 1, 0), 
-    X_nps, 
-    niter, 
-    PUMA_levels,
-    wts = NULL, 
-    typeIerr = alpha
-) 
-  
-  # Below is old, don't use
-
-  # First, use nps as prior
-
-  # FIXME: RAC1P4 caused (X_ps^T X_ps) to be singular 
-  my_X_ps <- X_ps[,setdiff(colnames(X_ps), "RAC1P4")]
-  my_X_nps <- X_nps[,setdiff(colnames(X_nps), "RAC1P4")]
-
-  niter <- 4000
-  # TODO: ask whether we should leave out the rand. fx.
-  trad_res_df <- nps_fit(
-    niter,
+  nps_prior_res <- nps_prior_mcmc(
     y_ps, 
-    cbind(my_X_ps[,2:ncol(my_X_ps)], Psi_ps), 
+    cbind(X_ps, Psi_ps), 
     y_nps, 
-    cbind(my_X_nps[,2:ncol(my_X_nps)], Psi_nps), 
-    PUMA_levels,
-    alpha
-  ) %>% 
-    mutate(submodel = paste("Trad", submodel))
+    cbind(X_nps, Psi_nps), 
+    niter = 4000, 
+    PUMA_levels = PUMA_levels,
+    wts = ps_scale_weights, 
+    typeIerr = alpha
+  )
   
-  # FIXME: this crashes the R session. Figure out why.
-  # rev_res_df <- nps_fit(
-  #   niter,
-  #   y_nps, 
-  #   my_X_nps, 
-  #   y_ps, 
-  #   my_X_ps, 
-  #   PUMA_levels,
-  #   alpha
-  # ) %>% 
-  #   mutate(submodel = paste("Reverse", submodel))
-
   # 11. Fit MRP (Qianyu)
   mrp=getMRP(MR=nps,
              ps=ps,
@@ -300,8 +277,8 @@ for (sim in 1:Nsim) {
     bulm_ipw,
     result_VSW,
     mrpr,
-    mrprp
-    wis_res
+    mrprp,
+    nps_prior_res
   )
 }
 
