@@ -90,6 +90,7 @@ all PS observations, and $1_n$ is a length $n$ vector where each entry is equal 
 mixed_dist_mcmc <- function(
     X, 
     wts,
+    PUMA,
     PUMA_levels,
     prior_prec,
     beta_NP_hat, 
@@ -192,6 +193,7 @@ power_prior_gibbs <- function(
     X_NP,
     wts, 
     a,
+    PUMA,
     PUMA_levels,
     kappas_all, 
     niter
@@ -387,6 +389,7 @@ power_prior_mh <- function(
     X_NP,
     wts, 
     a,
+    PUMA,
     PUMA_levels,
     niter,
     typeIerr
@@ -463,6 +466,94 @@ power_prior_mh <- function(
 }
 ```
 
+### HMC Implementation 
+
+```{r}
+# TODO: test this
+# TODO: better handle the parallel chains parallelization
+# TODO: better handle the random seed
+power_prior_cmdstanr <- function(
+  y,
+  X,
+  y_NP,
+  X_NP,
+  wts,
+  a,
+  PUMA,
+  PUMA_levels,
+  niter = 2000,
+  warmup = 1000,
+  chains = 4,
+  typeIerr = 0.05,
+  seed = 123
+) {
+  n <- nrow(X)
+  p <- ncol(X)
+  n_np <- nrow(X_NP)
+
+  # Rescale weights to sum to n
+  if (sum(wts) != n) {
+    wts <- n * wts / sum(wts)
+  }
+
+  stan_data <- list(
+    n = n,
+    n_np = n_np,
+    p = p,
+    X = X,
+    X_np = X_NP,
+    y = as.integer(y),
+    y_np = as.integer(y_NP),
+    w = as.numeric(wts),
+    a = as.numeric(a)
+  )
+
+  mod <- cmdstan_model("nps_prior_logistic.stan")
+
+  fit <- mod$sample(
+    data = stan_data,
+    iter_sampling = niter,
+    iter_warmup = warmup,
+    chains = chains,
+    seed = seed,
+    refresh = 500
+  )
+
+  # Extract posterior draws
+  beta_draws <- fit$draws("beta", format = "matrix")  # (S x p)
+  S <- nrow(beta_draws)
+
+  # Posterior predictive for PS units
+  eta <- X %*% t(beta_draws)            # n x S
+  P <- plogis(eta)
+
+  U <- matrix(runif(n * S), n, S)
+  y_pred <- (U < P)
+  storage.mode(y_pred) <- "integer"
+
+  # Area-level summaries
+  # TODO: figure out how the PUMA object ends up here (am I referring to something from the global env or a )
+  by_PUMA_sums <- rowsum(y_pred, group = PUMA, reorder = FALSE)
+  by_PUMA_means <- by_PUMA_sums / as.numeric(table(PUMA))[PUMA_levels]
+
+  point_est <- rowMeans(by_PUMA_means)
+  CI <- rowQuantiles(
+    by_PUMA_means,
+    probs = c(typeIerr / 2, 1 - typeIerr / 2)
+  )
+
+  res_df <- data.frame(
+    PUMA = PUMA_levels,
+    point_est = point_est,
+    lower_CI = CI[, 1],
+    upper_CI = CI[, 2],
+    model = "NPS Prior: Power Prior (cmdstanr)"
+  )
+
+  return(res_df)
+}
+```
+
 ## MCMC Wrapper: All Prior Specifications
 
 We use a wrapper function to call the above MCMC implementations for all four prior specifications. 
@@ -497,6 +588,7 @@ nps_prior_mcmc <- function(
     y_NP, 
     X_NP, 
     niter, 
+    PUMA,
     PUMA_levels,
     wts = NULL, 
     typeIerr = 0.05
@@ -539,6 +631,7 @@ nps_prior_mcmc <- function(
     md_res <- mixed_dist_mcmc(
         X, 
         wts,
+        PUMA,
         PUMA_levels,
         prior_prec,
         beta_NP_hat, 
@@ -564,6 +657,7 @@ nps_prior_mcmc <- function(
     mdl_res <- mixed_dist_mcmc(
         X, 
         wts,
+        PUMA,
         PUMA_levels,
         prior_prec,
         beta_NP_hat, 
@@ -580,6 +674,7 @@ nps_prior_mcmc <- function(
     mdl_ten_res <- mixed_dist_mcmc(
         X, 
         wts,
+        PUMA,
         PUMA_levels,
         prior_prec,
         beta_NP_hat, 
@@ -608,10 +703,22 @@ nps_prior_mcmc <- function(
         X_NP,
         wts, 
         a,
+        PUMA,
         PUMA_levels,
         niter,
         typeIerr
     )
+
+    # pp_res <- power_prior_cmdstanr(
+    #     y, 
+    #     X, 
+    #     y_NP, 
+    #     X_NP, 
+    #     wts, 
+    #     a, 
+    #     PUMA,
+    #     PUMA_levels
+    # )
 
     res_df <- rbind(
         md_res, 

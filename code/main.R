@@ -221,7 +221,8 @@ for (sim in 1:Nsim) {
   # 10. Fit NPS-informed prior model (Ethan)
 
   # TODO: use survey::rake to make the survey weight covariate
-  # TODO: check mixing; try other PG sampler packages; if nothing else, use Stan for power prior 
+  # TODO: check mixing; try other PG sampler packages
+  # TODO: test whether the Stan implementation works
   # TODO: output two sets of results: once with a pseudolikelihood and once with the raking covariate
   #        (for this, need to add a model prefix argument (for final model names like "NPS Prior w/ Raking: Power Prior" and "NPS Prior w/ Pseudolikelihood: Power Prior"))
 
@@ -231,6 +232,7 @@ for (sim in 1:Nsim) {
     y_nps, 
     cbind(X_nps, Psi_nps), 
     niter = 4000, 
+    PUMA = PUMA,
     PUMA_levels = PUMA_levels,
     wts = ps_scale_weights, 
     typeIerr = alpha
