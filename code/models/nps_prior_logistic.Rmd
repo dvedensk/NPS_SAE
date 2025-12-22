@@ -179,6 +179,84 @@ p(\beta \mid \text{data}, \{\tau_j^2\}) \propto
 \mathcal{N}(\beta \mid 0, \text{diag}(\tau_0^2, \ldots, \tau_p^2))
 \]
 
+### Gibbs Sampler (Remove this section later; for development only)
+
+If we used Polya-Gamma data augmentation, the Gibbs sampler would be as follows (currently, we don't use this because it is too slow):
+
+```{r}
+power_prior_gibbs <- function(
+    X,
+    X_NP,
+    wts, 
+    a,
+    PUMA_levels,
+    kappas_all, 
+    niter
+) {
+    n <- nrow(X)
+    n_NP <- nrow(X_NP)
+    p <- ncol(X)
+
+    X_all <- rbind(X, X_all)
+
+    bet <- rep(0, p)
+    Bet <- matrix(NA, p, niter)
+    y_pred <- matrix(NA, niter, n)
+
+    for(s in 1:niter) {
+        # Latent variance draws
+        tau2 <- 1 / rgamma(p, 2, (18.75 + bet^2) / 2)
+
+        # PS Polya Gamma Draws
+        omega <- rpg(n, wts, as.numeric(X %*% bet))
+        # NPS Polya Gamma Draws
+        omega_NP <- rpg(n_NP, a, as.numeric(X_NP %*% bet))
+
+        # Calculate posterior covariance and mean of regression coefficients
+        post_prec <- crossprod(X_all, diag(c(omega, omega_NP))) %*% X_all + 
+            diag(1 / tau2)
+
+        post_cov <- post_prec %>%
+            chol() %>% 
+            chol2inv()
+
+        post_mn <- as.numeric(post_cov %*% crossprod(X_all, kappas_all))
+
+        # Draw standard normals, scale and shift to the posterior distribution
+        bet <- rmvnorm(1, post_mn, post_cov)[1,]
+        Bet[,s] <- bet
+    }
+
+
+    U <- runif(n * niter) %>% 
+        matrix(n)
+    P <- plogis(unname(X %*% Bet)) # expit of the linear predictor 
+
+    y_pred <- (U < P)
+    storage.mode(y_pred) <- "integer"
+
+    by_PUMA_sums <- y_pred %>% 
+        rowsum(group = PUMA, reorder = FALSE) # PUMA-level sums
+
+    # Divide by # of individuals in each PUMA
+    by_PUMA_means <- by_PUMA_sums / as.numeric(table(PUMA))[PUMA_levels]
+
+    # Calculate area-level point and interval estimates
+    point_est <- rowMeans(by_PUMA_means)
+    CI <- rowQuantiles(by_PUMA_means, probs = c(typeIerr / 2, 1 - typeIerr / 2))
+
+    res_df <- data.frame(
+        PUMA = PUMA_levels, 
+        point_est = point_est, 
+        lower_CI = CI[,1], 
+        upper_CI = CI[,2], 
+        model = "NPS Prior: Power Prior"
+    )
+
+    return(res_df)
+}
+```
+
 ### Metropolis-Hastings
 
 #### Helper Functions
@@ -516,6 +594,9 @@ nps_prior_mcmc <- function(
     f = p * (n - 1) / (n - p)
     Fstat = t2 / f
     a <- pf(Fstat, p, n - p, lower.tail = F)
+
+    # This would be for the power prior Gibbs sampler implementation (currently unused)
+    # kappas_all <- c(kappas, a * (y_NP - 1/2))
 
     pp_res <- power_prior_mh(
         y,

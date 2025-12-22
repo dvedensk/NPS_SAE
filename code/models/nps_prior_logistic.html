@@ -510,6 +510,80 @@ p(\beta \mid \text{data}, \{\tau_j^2\}) \propto
 \left\{ \prod_{\ell = 1}^{\tilde{n}} \frac{\exp(\tilde{x}_\ell&#39;{\beta})^{a \tilde{y}_\ell}}{[1 + \exp(\tilde{x}_\ell&#39;{\beta})]^{a}} \right\} 
 \mathcal{N}(\beta \mid 0, \text{diag}(\tau_0^2, \ldots, \tau_p^2))
 \]</span></p>
+<div id="gibbs-sampler-remove-this-section-later-for-development-only" class="section level3">
+<h3>Gibbs Sampler (Remove this section later; for development only)</h3>
+<p>If we used Polya-Gamma data augmentation, the Gibbs sampler would be as follows (currently, we don’t use this because it is too slow):</p>
+<pre class="r"><code>power_prior_gibbs &lt;- function(
+    X,
+    X_NP,
+    wts, 
+    a,
+    PUMA_levels,
+    kappas_all, 
+    niter
+) {
+    n &lt;- nrow(X)
+    n_NP &lt;- nrow(X_NP)
+    p &lt;- ncol(X)
+
+    X_all &lt;- rbind(X, X_all)
+
+    bet &lt;- rep(0, p)
+    Bet &lt;- matrix(NA, p, niter)
+    y_pred &lt;- matrix(NA, niter, n)
+
+    for(s in 2:niters) {
+        # Latent variance draws
+        tau2 &lt;- 1 / rgamma(p, 2, (18.75 + bet^2) / 2)
+
+        # PS Polya Gamma Draws
+        omega &lt;- rpg(n, wts, as.numeric(X %*% bet))
+        # NPS Polya Gamma Draws
+        omega_NP &lt;- rpg(n_NP, a, as.numeric(X_NP %*% bet))
+
+        # Calculate posterior covariance and mean of regression coefficients
+        post_prec &lt;- crossprod(X_all, diag(c(omega, omega_NP))) %*% X_all + 
+            diag(1 / tau2)
+
+        post_cov &lt;- post_prec %&gt;%
+            chol() %&gt;% 
+            chol2inv()
+
+        post_mn &lt;- as.numeric(post_cov %*% crossprod(X_all, kappas_all))
+
+        # Draw standard normals, scale and shift to the posterior distribution
+        bet &lt;- rmvnorm(1, post_mn, post_cov)[1,]
+        Bet[,s] &lt;- bet
+    }
+
+    U &lt;- runif(n * niter) %&gt;% 
+        matrix(n)
+    P &lt;- plogis(unname(X %*% Bet)) # expit of the linear predictor 
+
+    y_pred &lt;- (U &lt; P)
+    storage.mode(y_pred) &lt;- &quot;integer&quot;
+
+    by_PUMA_sums &lt;- y_pred %&gt;% 
+        rowsum(group = PUMA, reorder = FALSE) # PUMA-level sums
+
+    # Divide by # of individuals in each PUMA
+    by_PUMA_means &lt;- by_PUMA_sums / as.numeric(table(PUMA))[PUMA_levels]
+
+    # Calculate area-level point and interval estimates
+    point_est &lt;- rowMeans(by_PUMA_means)
+    CI &lt;- rowQuantiles(by_PUMA_means, probs = c(typeIerr / 2, 1 - typeIerr / 2))
+
+    res_df &lt;- data.frame(
+        PUMA = PUMA_levels, 
+        point_est = point_est, 
+        lower_CI = CI[,1], 
+        upper_CI = CI[,2], 
+        model = &quot;NPS Prior: Power Prior&quot;
+    )
+
+    return(res_df)
+}</code></pre>
+</div>
 <div id="metropolis-hastings" class="section level3">
 <h3>Metropolis-Hastings</h3>
 <div id="helper-functions" class="section level4">
@@ -832,6 +906,9 @@ p(\beta \mid \text{data}, \{\tau_j^2\}) \propto
     f = p * (n - 1) / (n - p)
     Fstat = t2 / f
     a &lt;- pf(Fstat, p, n - p, lower.tail = F)
+
+    # This would be for the power prior Gibbs sampler implementation (currently unused)
+    # kappas_all &lt;- c(kappas, a * (y_NP - 1/2))
 
     pp_res &lt;- power_prior_mh(
         y,
