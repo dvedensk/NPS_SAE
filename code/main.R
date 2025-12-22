@@ -222,6 +222,8 @@ for (sim in 1:Nsim) {
 
   # TODO: use survey::rake to make the survey weight covariate
   # TODO: check mixing; try other PG sampler packages; if nothing else, use Stan for power prior 
+  # TODO: output two sets of results: once with a pseudolikelihood and once with the raking covariate
+  #        (for this, need to add a model prefix argument (for final model names like "NPS Prior w/ Raking: Power Prior" and "NPS Prior w/ Pseudolikelihood: Power Prior"))
 
   nps_prior_res <- nps_prior_mcmc(
     y_ps, 
