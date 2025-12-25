@@ -1,4 +1,4 @@
-vsw_out <- function(ps, nps, X_formula, response){
+vsw_out <- function(ps, nps, X_formula = NULL, response){
   # 3. Build design matrices for PS
   # X_ps   <- model.matrix(X_formula,   data = ps)
   # X_nps <- model.matrix(X_formula, data = nps)
@@ -39,7 +39,7 @@ vsw_out <- function(ps, nps, X_formula, response){
   
   K <- nrow(Z_hat_ps)
   C <- length(unique(ps[[response]]))
-  # if(nrow(Z_hat_ps) != nrow(Z_hat_nps)){stop("Probability sample and non-probability sample domains dismatch.")}
+  # if(nrow(Z_hat_ps) != nrow(Z_hat_nps)){stop("Probability sample and non-probability sample domains mismatch.")}
   hat_beta_c <- colMeans(Z_combined[,4:5] - Z_hat_ps[,2:3])
   hat_sig <- sum((Z_combined[,4:5] - Z_combined[,2:3] - 
                     matrix(hat_beta_c, nrow = nrow(Z_combined), ncol = 2, byrow = TRUE))^2)/(C*(K-1))
@@ -58,5 +58,6 @@ vsw_out <- function(ps, nps, X_formula, response){
   }
   
   return(
+    # This version only allow the case when the data has only two categores, and the function is estimating the probability of the response 1.
     data.frame("PUMA" = Z_hat_nps$PUMA, "VSW_point_est" = combined_results[,1], "ps_est" = Z_hat_ps[,2,drop = TRUE], "nps_est" = Z_hat_nps[,2,drop = TRUE], "pooled_results" = z_hat_pool[,2, drop = TRUE], "lower_CI" = NA, "upper_CI" = NA, "model" = "VSW") )
 }
