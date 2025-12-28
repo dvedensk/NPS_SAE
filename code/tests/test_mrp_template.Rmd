@@ -400,7 +400,7 @@ tryCatch(
 # Results
 
 ```{r diagnostics}
-
+range(mrp$rhat)
 ```
 
 ```{r extract-estimates}
@@ -475,7 +475,7 @@ int_score <- function(alpha, y, lower, upper) {
 
 # Combine your model results with direct estimates
 all_results <- bind_rows(direst, mrppb,mrpra)
-
+# 
 # Calculate performance metrics for all models
 performance_metrics <- true_values %>%
   left_join(all_results, by = "PUMA") %>%  # Replace 'direst' with 'all_results' when you have your model
