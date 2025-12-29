@@ -10,7 +10,7 @@ library(LaplacesDemon)
 # iter is the number of iterations
 # burn is the length of burn in
 # weights is the vector of survey weights
-fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=NULL){
+fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=NULL, display_progress=FALSE){
   p <- ncol(X)
   r <- ncol(Psi)
   n <- length(y)
@@ -25,12 +25,12 @@ fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=N
   eta_out <- matrix(NA, nrow=iter, ncol=r)
   sigma2_eta_out <- rep(NA, iter)
 
-  pb <- txtProgressBar(min=0, max=iter, style=3)
+  if(display_progress) { pb <- txtProgressBar(min=0, max=iter, style=3) }
   for(i in 1:iter){
     ## Sample fixed effects
     prec_beta <- solve(t(X) %*% Diagonal(length(w), w) %*% X + b_inv)
     mean_beta <- t(X) %*% Diagonal(length(w), w) %*% (kappa/w - Psi %*% eta )
-    beta <- beta_out[i, ]  <- as.numeric(rmvnorm(1, 
+    beta <- beta_out[i, ]  <- as.numeric(mvtnorm::rmvnorm(1, 
 						mean=prec_beta %*% mean_beta, 
 						sigma=as.matrix(prec_beta)))
     
@@ -38,7 +38,7 @@ fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=N
     Einv <- (1/sigma2_eta) * Diagonal(r)
     prec_eta <- solve(t(Psi) %*% Diagonal(length(w), w) %*% Psi + Einv)
     mean_eta <- t(Psi) %*% Diagonal(length(w),w) %*% (kappa/w - X %*% beta )
-    eT <- as.numeric(rmvnorm(1, 
+    eT <- as.numeric(mvtnorm::rmvnorm(1, 
 			     mean=prec_eta %*% mean_eta, 
 			     sigma=as.matrix(prec_eta)))
     eta <- eta_out[i,]  <- eT - mean(eT)
@@ -50,7 +50,7 @@ fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=N
     
     ## Sample latent PG variables
     w <- rpg(n, weights, as.numeric(X%*%beta + Psi%*%eta))
-    setTxtProgressBar(pb, i)
+    if(display_progress) { setTxtProgressBar(pb, i) }
   }
   return(list(beta=beta_out[-c(1:burn),],
               eta=eta_out[-c(1:burn),],
@@ -78,12 +78,9 @@ post_preds <- function(grouped_pop_df, beta, eta, alpha, X_formula, Psi_formula)
 
 bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=1000,
                          X_formula, Psi_formula, iter=1000, burn=500,
-                         weights=NULL, summaries=TRUE) {
+                         weights=NULL, summaries_only=TRUE) {
   coeffs <- fit_bulm(X, Psi, y, sigma2_beta, iter, burn, weights)
-  if (summaries){
-    return(post_preds(grouped_pop_df, coeffs$beta, coeffs$eta,
-                      alpha, X_formula, Psi_formula))
-  } else{
-    return(coeffs)
-  }
+    return(list(summaries = post_preds(grouped_pop_df, coeffs$beta, coeffs$eta,
+                                      alpha, X_formula, Psi_formula),
+                chains=coeffs))
 }
