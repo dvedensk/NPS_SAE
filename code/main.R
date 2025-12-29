@@ -243,14 +243,17 @@ for (sim in 1:Nsim) {
 
 
   # 10. Fit VSW method (Qi)
-  result_VSW <- vsw_out(ps, nps, X_formula) # a vector of 4, (mse, mab, cr, is)
+  result_VSW <- vsw_out(ps[, !colnames(ps) %in% "weights"], nps, X_formula, response = response_var) 
+  # This function returns a data frame with columns: "PUMA", "VSW_point_est", "ps_est", "nps_est", "pooled_results", "lower_CI", "upper_CI", "model"
+  VSW_out <- result_VSW[,c("PUMA","VSW_point_est","lower_CI","upper_CI","model")]
+  colnames(VSW_out) <- colnames(direst)
   # 11. Combine results
 
   results[[sim]] <- rbind(
     direst,
     bulm_out,
     bulm_ipw,
-    result_VSW,
+    VSW_out,
     mrpr,
     mrprp
   )
