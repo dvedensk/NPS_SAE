@@ -2,7 +2,6 @@ data
 .Rproj.user
 *.Rproj
 .Rhistory
-
 # Personal files (not tracked)
 .gitignore
 .claude/
