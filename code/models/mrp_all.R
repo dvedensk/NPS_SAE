@@ -103,7 +103,8 @@ getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
                 WFPBB=FALSE,
-                L=5){
+                L=5,
+                threads=4){
 
   # TRAINING DATA ----
   nps_ca <- MR  # nps
@@ -121,7 +122,7 @@ getMRP=function(MR=nps,
   y <- as.integer(nps_ca$PUBCOV)
 
 
-  threads <- 4
+  #threads <- 4
   grainsize=as.integer(n / (threads))
 
   #  data dependent prior for beta
@@ -361,7 +362,8 @@ getMRP_INT <- function(MR,
                        ps,
                        acs_pop,
                        mod = mod,
-                       adjust=T
+                       adjust=TRUE,
+                       threads=4
 ) {
   
   
@@ -509,7 +511,7 @@ getMRP_INT <- function(MR,
   
   
   n <- nrow(X_train)
-  threads <- 4
+  # threads <- 4
   grainsize=as.integer(n / (threads*4))
   
   puma_id_train <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
