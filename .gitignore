@@ -21,3 +21,4 @@ code/tests/quick_ps_search.R
 code/tests/test_flexible_config.R
 code/tests/test_top_continuous_vars.R
 *~
+.DS_Store
