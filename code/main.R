@@ -239,7 +239,8 @@ for (sim in 1:Nsim) {
 
   #  mrp_int
   mrpint <- mrp1$puma_summary_mrpp
-
+  mrpint <- mrp1$puma_summary_mrpr
+  
 
 
 

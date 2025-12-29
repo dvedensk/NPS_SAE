@@ -76,25 +76,23 @@ cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
 
 ##  Multilevel regression
 
-Let i be individual, j be PUMA. We first fit logistic regression using NPS data. 
+Let i be individual, m be PUMA. We first fit logistic regression using NPS data. 
 
 $$
 \begin{aligned}
 y_i &\sim \text{Bernoulli}(p_i) \\
-\text{logit}(p_i) &=  \mathbf{x}_i^\top \boldsymbol{\beta} \\
+\text{logit}(p_i) &=  \mathbf{x}_i^\top \boldsymbol{\beta}+ \alpha_{m[i]}\\
+   \alpha_m &\sim \text{Normal}(0, \sigma_{m})\qquad m = 1,\cdots, M = 281, \\
+
 \boldsymbol{\beta} &\sim \text{Normal}(0, \boldsymbol{\sigma_{\beta}})
+
 \end{aligned}
 $$
 
-covariates:
-
-- **Age**  (categorized as 1. under 18, 2. 18-33, 3. 34-64, and 4. 65+)
-- **race** (Hispanic, white, Asian, Black, other), and
-- **sex**  (male, female)
-
-priors:
-
 Moderately informative priors $\sigma_{\beta} =2.5*sd(Y)/sd(X))$ are used for covariates baseed on prior specification in supplementary A.1.
+<span style="color: blue;"><i>J was used for PUMA and c was used for cells in the code. I changed the notation in the notes to use m for PUMA and j for cells, since Si (2023) uses j for cells and does not use areal level notation.</i></span>
+
+
 
 
 ```{r ,eval=FALSE}
@@ -201,16 +199,16 @@ model {
 
 ##  Poststrification
 ### using probability sample 
-Let s be posterior draw and c be cell build from probability sample, $w_c$ is sum of individual weight in the cell c.  
-\[p_{c,s} = \text{expit} \left( X_c^{\top} \beta_s \right)\]
-The PUMA-level estimate for area \( j \) is then
+Let s be posterior draw and j be cell build from probability sample, $w_j$ is sum of individual weight in the cell j.  
+\[p_{j,s} = \text{expit} \left( X_j^{\top} \beta_s \right)\]
+The PUMA-level estimate for area \( m \) is then
 \[
-\theta_{j,s}
+\theta_{m,s}
 =
 \frac{
-\sum\limits_{c \in j} w_c \, p_{c,s}
+\sum\limits_{j \in m} w_j \, p_{c,s}
 }{
-\sum\limits_{c \in j} w_c
+\sum\limits_{j \in m} w_j
 }.
 \]
 
@@ -366,8 +364,8 @@ source(here("code/models","mrp_all.R"))
 
 
 start_time <- Sys.time()
- ps_df <- acs_pop[ps$idx, ] %>%
-    mutate(weights = ps$weights)
+ # ps_df <- acs_pop[ps$idx, ] %>%
+ #    mutate(weights = ps$weights)
 tryCatch(
   {
     mrp <- getMRP(
