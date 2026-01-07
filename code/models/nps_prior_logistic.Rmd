@@ -1,8 +1,10 @@
 ---
-title: "NPS Prior Logistic Regression: Methods and MCMC Implementation"
+title: 'NPS Prior Logistic Regression: Methods and MCMC Implementation'
 author: "Ethan Pawl"
 date: "November 2025"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 # Overview
@@ -466,91 +468,64 @@ power_prior_mh <- function(
 }
 ```
 
+
+
 ### HMC Implementation 
 
-```{r}
-# TODO: test this
-# TODO: better handle the parallel chains parallelization
-# TODO: better handle the random seed
-power_prior_cmdstanr <- function(
-  y,
-  X,
-  y_NP,
-  X_NP,
-  wts,
-  a,
-  PUMA,
-  PUMA_levels,
-  niter = 2000,
-  warmup = 1000,
-  chains = 4,
-  typeIerr = 0.05,
-  seed = 123
-) {
-  n <- nrow(X)
-  p <- ncol(X)
-  n_np <- nrow(X_NP)
+In the Stan implementation, we target the following log posterior:
 
-  # Rescale weights to sum to n
-  if (sum(wts) != n) {
-    wts <- n * wts / sum(wts)
+\[
+\log p(\beta \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\, + \,
+a \sum_{\ell=1}^{\tilde{n}} \log \text{Bernoulli}\left(\tilde{y}_\ell \mid \text{logit}^{-1}(\tilde{x}_\ell'\beta)\right)
+\, + \,
+\sum_{j=0}^{p} \log t_3(\beta_j \mid 0, 2.5).
+\]
+
+Equivalently, using the logit link, the log-likelihood terms are
+
+\[
+\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\},
+\qquad
+\log p(\tilde{y}_\ell \mid \beta) = \tilde{y}_\ell (\tilde{x}_\ell'\beta) - \log\{1 + \exp(\tilde{x}_\ell'\beta)\}.
+\]
+
+Here, $w_i$ are the rescaled PS weights (summing to $n$), and $a$ is the power-prior exponent.
+
+```{stanmodel}
+data {
+  int<lower=1> n;                 // PS sample size
+  int<lower=1> n_np;              // NPS sample size
+  int<lower=1> p;                 // number of coefficients
+
+  matrix[n, p] X;                 // PS design matrix
+  matrix[n_np, p] X_np;           // NPS design matrix
+
+  array[n] int<lower=0, upper=1> y;        // PS outcomes
+  array[n_np] int<lower=0, upper=1> y_np;  // NPS outcomes
+
+  vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
+  real<lower=0, upper=1> a;       // power prior exponent
+}
+
+parameters {
+  vector[p] beta;
+}
+
+model {
+  // Prior: t_3(0, 2.5)
+  beta ~ student_t(3, 0, 2.5);
+
+  // PS pseudolikelihood
+  for (i in 1:n) {
+    target += w[i] * bernoulli_logit_lpmf(y[i] | X[i] * beta);
   }
 
-  stan_data <- list(
-    n = n,
-    n_np = n_np,
-    p = p,
-    X = X,
-    X_np = X_NP,
-    y = as.integer(y),
-    y_np = as.integer(y_NP),
-    w = as.numeric(wts),
-    a = as.numeric(a)
-  )
-
-  mod <- cmdstan_model("nps_prior_logistic.stan")
-
-  fit <- mod$sample(
-    data = stan_data,
-    iter_sampling = niter,
-    iter_warmup = warmup,
-    chains = chains,
-    seed = seed,
-    refresh = 500
-  )
-
-  # Extract posterior draws
-  beta_draws <- fit$draws("beta", format = "matrix")  # (S x p)
-  S <- nrow(beta_draws)
-
-  # Posterior predictive for PS units
-  eta <- X %*% t(beta_draws)            # n x S
-  P <- plogis(eta)
-
-  U <- matrix(runif(n * S), n, S)
-  y_pred <- (U < P)
-  storage.mode(y_pred) <- "integer"
-
-  # Area-level summaries
-  # TODO: figure out how the PUMA object ends up here (am I referring to something from the global env or a )
-  by_PUMA_sums <- rowsum(y_pred, group = PUMA, reorder = FALSE)
-  by_PUMA_means <- by_PUMA_sums / as.numeric(table(PUMA))[PUMA_levels]
-
-  point_est <- rowMeans(by_PUMA_means)
-  CI <- rowQuantiles(
-    by_PUMA_means,
-    probs = c(typeIerr / 2, 1 - typeIerr / 2)
-  )
-
-  res_df <- data.frame(
-    PUMA = PUMA_levels,
-    point_est = point_est,
-    lower_CI = CI[, 1],
-    upper_CI = CI[, 2],
-    model = "NPS Prior: Power Prior (cmdstanr)"
-  )
-
-  return(res_df)
+  // NPS likelihood (power prior)
+  for (l in 1:n_np) {
+    target += a * bernoulli_logit_lpmf(y_np[l] | X_np[l] * beta);
+  }
 }
 ```
 
