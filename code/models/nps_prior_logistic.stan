@@ -6,8 +6,8 @@ data {
   matrix[n, p] X;                 // PS design matrix
   matrix[n_np, p] X_np;           // NPS design matrix
 
-  int<lower=0, upper=1> y[n];     // PS outcomes
-  int<lower=0, upper=1> y_np[n_np]; // NPS outcomes
+  array[n] int<lower=0, upper=1> y;        // PS outcomes
+  array[n_np] int<lower=0, upper=1> y_np;  // NPS outcomes
 
   vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
   real<lower=0, upper=1> a;       // power prior exponent
