@@ -8,6 +8,8 @@ int_score <- function(alpha, truth, L, U){
 # via a logistic model distinguishing prob vs. non‐prob cases
 
 estimate_ipw <- function(ps, nps, cov_formula, method) {
+  # FIXME: a one-liner is 
+  # stopifnot(method %in% c("ignorable", "beta_reg", "weighted"))
   if(! (method %in% c("ignorable", "beta_reg", "weighted"))) {
     stop()
   }

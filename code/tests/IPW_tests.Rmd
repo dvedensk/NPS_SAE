@@ -35,6 +35,7 @@ n_burn <- 500
 ```
 
 ```{r regenerate-samples, include=FALSE, cache=TRUE}
+# FIXME: setwd seems unnecessary here; wd should always be project root
 # Regenerate test samples with current weights
 # Set working directory to project root temporarily
 old_wd <- getwd()

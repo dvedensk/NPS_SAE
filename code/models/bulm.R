@@ -27,6 +27,12 @@ fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=N
 
   if(display_progress) { pb <- txtProgressBar(min=0, max=iter, style=3) }
   for(i in 1:iter){
+
+    # FIXME: using the precision -> chol -> backsolve would be faster
+    # also qr.solve to calculate the mean
+    # also crossprod(X * sqrt(w)) may be faster than t(X) %*% Diagonal(length(w), w) %*% X 
+    # also prec_beta and prec_eta are really covariance matrices due to the solve calls
+
     ## Sample fixed effects
     prec_beta <- solve(t(X) %*% Diagonal(length(w), w) %*% X + b_inv)
     mean_beta <- t(X) %*% Diagonal(length(w), w) %*% (kappa/w - Psi %*% eta )
@@ -76,6 +82,7 @@ post_preds <- function(grouped_pop_df, beta, eta, alpha, X_formula, Psi_formula)
   return(summary_df)
 }
 
+# FIXME: summaries_only is unused
 bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=1000,
                          X_formula, Psi_formula, iter=1000, burn=500,
                          weights=NULL, summaries_only=TRUE) {

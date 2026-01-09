@@ -202,6 +202,7 @@ for (sim in 1:Nsim) {
   # nps_ipw in the range of ~ 2-10, while beta_reg gives nps_ipw in the range of ~40-60). 
   # Is this expected?
 
+  # FIXME: should there be code for 7b? If not, we probably don't need this comment here.
   # 7b. rescale normalized so that #the weighted fraction of the nonprobability 
   #     sample is equal to the unweighted fraction of the nonprobability sample 
   #     cases in the combined dataset, and similarly the weighted fraction of 
