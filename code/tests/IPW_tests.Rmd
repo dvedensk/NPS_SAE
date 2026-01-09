@@ -21,8 +21,8 @@ library(ggplot2)
 library(here)
 library(survey)
 
-#source("code/models/bulm.R")
-source("/home/d/Desktop/Mizzou/Research/MSS_NPS/code/models/bulm.R")
+source(here::here("code", "models", "bulm.R"))
+# source("/home/d/Desktop/Mizzou/Research/MSS_NPS/code/models/bulm.R")
 ```
 
 We'll set a few parameters for the test run here.
@@ -39,14 +39,15 @@ n_burn <- 500
 # Set working directory to project root temporarily
 old_wd <- getwd()
 setwd(here::here())
-source("/home/d/Desktop/Mizzou/Research/MSS_NPS/code/tests/create_test_sample.R")
+# source("/home/d/Desktop/Mizzou/Research/MSS_NPS/code/tests/create_test_sample.R")
+source(here::here("code", "tests", "create_test_sample.R"))
 setwd(old_wd)
 
 # Load the generated samples
-load(here::here("data/test_sample.RData"))
+load(here::here("data", "test_sample.RData"), verbose = TRUE)
 
 # Load and factor population for comparisons (matches main.R)
-acs_pop <- read_csv(here::here("data/ACS_NPS_pop.csv")) %>%
+acs_pop <- read_csv(here::here("data", "ACS_NPS_pop.csv")) %>%
   mutate(
     AGEP_binned = factor(AGEP_binned),
     RAC1P = factor(RAC1P),
@@ -83,6 +84,7 @@ data.frame(
 ) %>%
     mutate(PUBCOV_Rate = round(PUBCOV_Rate, 3))
 
+# FIXME: remove this
 #calculate_sample_diagnostics(pop_df=acs_pop,
 #                             ps_sample=ps_df,
 #                             nps_sample=nps_df,

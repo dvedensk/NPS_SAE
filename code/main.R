@@ -86,7 +86,7 @@ acs_pop_grouped <- acs_pop %>%
 X_formula <- as.formula("~ AGEP_binned + RAC1P + SEX")
 Psi_formula <- as.formula("~ -1 + PUMA")
 
-alpha <- .05
+alpha <- .05 
 N_pop <- nrow(acs_pop)
 pop_mean <- mean(acs_pop[[response_var]], na.rm = TRUE)
 cat(
@@ -116,6 +116,8 @@ for (sim in 1:Nsim) {
   nonprob_samples[[sim]] <- nps_sample
 
   # check the PS weights
+  # FIXME: should this be true? It isn't. If it need not be true, we could add more explanation in the comment 
+  # or remove this line. Do we also need a scaled version of the weights which sum to the population size?
   cat("PS weight Check: sum(ps_weights) =", sum(ps_sample$weights), "vs N_pop =", N_pop, "\n")
 
   # Calculate and print sample diagnostics (DDC and ESS)
@@ -187,6 +189,7 @@ for (sim in 1:Nsim) {
   )
   bulm_out$model <- "bulm"
 
+  # FIXME: remove this because it was already done in lines 147-149
   # 6. Build design matrices for NPS
   X_nps   <- model.matrix(X_formula,   data = nps)
   Psi_nps <- model.matrix(Psi_formula, data = nps)
@@ -194,7 +197,10 @@ for (sim in 1:Nsim) {
 
   # 7. Estimate IP weights for NPS
   ipw <- estimate_ipw(ps = ps, nps = nps, cov_formula = X_formula,
-                      method="ignorable")
+                      method="weighted")
+  # FIXME: the beta_reg and weighted estimates differ greatly (weighted gives 
+  # nps_ipw in the range of ~ 2-10, while beta_reg gives nps_ipw in the range of ~40-60). 
+  # Is this expected?
 
   # 7b. rescale normalized so that #the weighted fraction of the nonprobability 
   #     sample is equal to the unweighted fraction of the nonprobability sample 

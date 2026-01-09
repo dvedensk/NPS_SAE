@@ -12,10 +12,14 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
     stop()
   }
 
+  ######
+  # FIXME: moving these lines closer to the "# Normalize" comment 
+  # would enhance readability.
   n_ps <- nrow(ps)
   n_nps <- nrow(nps)
   C_s <- n_ps/(n_nps + n_ps)
   C_s_star <- n_nps/(n_nps + n_ps)
+  ######
   ps_weights <- ps$PWGTP #Need to double check whether scaling matters here
       
   if(method == "beta_reg") {
@@ -43,17 +47,22 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
 
     nps_prob_pred  <- predict(fit_prop, newdata = nps, type = "response")
   }
+
+  # FIXME: if method == ignorable (used in main), nps_prob_pred is never defined
   nps_weights <- 1/nps_prob_pred
-  
+
   # Normalize 
   nps_weights <- nps_weights * (C_s_star * sum(nps_weights)/sum(ps_weights))
   ps_weights <- ps_weights * C_s
 
-  return(list(nps_ipw = nps_ipw,
-              ps_ipw = ps_ipw)
+  # return(list(nps_ipw = nps_ipw,
+  #             ps_ipw = ps_ipw))
+  # FIXME: ^ variable names don't match. I assume you meant
+  return(list(nps_ipw = nps_weights,
+              ps_ipw = ps_weights))
 }
 
 
     
-
+# FIXME: remove this
 #brm_out <- brm(1/PWGTP ~ AGEP + RAC1P + SEX, data=ps, family=Beta())
