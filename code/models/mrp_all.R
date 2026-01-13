@@ -207,35 +207,45 @@ getMRP=function(MR=nps,
   
   
   if(WFPBB){
-    index_list <- vector("list", L)
+    # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
+    S <- nrow(beta)
+    mu_boot_array <- array(NA_real_, dim = c(S, J, L))
+
+    cat("\nGenerating", L, "bootstrap samples for WFPBB...\n")
     system.time({
       for (l in 1:L) {
-        index_list[[l]] <- MSIMST::WFPBB(
+        # Generate bootstrap sample l
+        boot_idx <- MSIMST::WFPBB(
           y = 1:nrow(ps),
           w = ps$weights,
           N = sum(ps$weights),
           n = nrow(ps),
           verbatim = FALSE
         )
-        print(paste("Now generate WFPBB", l))
+
+        # Resample THIS bootstrap replicate
+        ps_boot <- ps[boot_idx, ]
+
+        # Collapse THIS bootstrap sample to cells
+        ps_boot_cells <- collapse_to_cells(ps_boot, nps_ca, PUMA_lev, weight_col = "weights")
+
+        # Poststratify THIS bootstrap sample
+        mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
+          poststrat_SxJ(beta=beta,
+                        apuma_draws,
+                        Xp=ps_boot_cells$Xp,
+                        g=ps_boot_cells$g,
+                        w=ps_boot_cells$w,
+                        J=J) else
+                          matrix(NA_real_, nrow = S, ncol = J)
+
+        if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
       }
     })
-    ps_star <- ps[unlist(index_list), ]
-    ps_star_cells <- collapse_to_cells(ps_star, nps_ca, PUMA_lev, weight_col = "weights")
-    
-    # Build Ps (probability-sample poststrat) block
-    ps_b_star <- mk_pred(ps_star, colnames(X_train), PUMA_lev, nps_ca)  
-    w_ps_star <- ps_star$weights[match(rownames(ps_b_star$X), rownames(ps_star))]  
-    
-    mu_star_draws <- if (nrow(ps_star_cells$Xp) > 0)
-      poststrat_SxJ(beta=beta, 
-                    Xp=ps_star_cells$Xp, 
-                    g=ps_star_cells$g, 
-                    w=ps_star_cells$w, 
-                    J=J) else
-                      matrix(NA_real_, nrow = nrow(beta), ncol = J)
-    
-    puma_summary_mrpr_WFPBB <- make_summary(mu_star_draws,  PUMA_lev, "mrp-r-WFPBB")
+
+    # Flatten S × J × L into (S*L) × J to capture both uncertainties
+    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
+    puma_summary_mrpr_WFPBB <- make_summary(mu_combined,  PUMA_lev, "mrp-r-WFPBB")
     
     
   }else{
