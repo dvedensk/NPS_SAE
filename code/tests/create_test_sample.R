@@ -30,6 +30,7 @@ nps <- get_NPS(
 # Extract data frames and convert categorical variables to factors for modeling
 ps_df <- acs_pop[ps$idx, ] %>%
   mutate(
+    weights = ps$weights,  # Add sampling weights (to match main.R convention)
     AGEP_binned = factor(AGEP_binned), # Use binned version for modeling
     RAC1P = factor(RAC1P),
     SEX = factor(SEX),

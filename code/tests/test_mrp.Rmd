@@ -1,0 +1,508 @@
+---
+title: "Model Testing for MRP"
+author: "Qianyu Dong"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Load Data
+
+```{r load-libraries}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(cmdstanr)
+library(here)
+```
+
+```{r regenerate-samples}
+# Regenerate test samples with current weights
+# Set working directory to project root temporarily
+old_wd <- getwd()
+setwd(here::here())
+source("code/tests/create_test_sample.R")
+setwd(old_wd)
+
+# Load the generated samples
+load(here::here("data/test_sample.RData"))
+
+# Load and factor population for comparisons (matches main.R)
+acs_pop <- read_csv(here::here("data/ACS_NPS_pop.csv")) %>%
+  mutate(
+    AGEP_binned = factor(AGEP_binned),
+    RAC1P = factor(RAC1P),
+    SEX = factor(SEX),
+    PUMA = factor(PUMA)
+  )
+
+cat("✓ Samples regenerated\n")
+```
+
+# Data Overview
+
+```{r overview}
+data.frame(
+  Sample = c("Population", "PS", "NPS"),
+  N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
+  PUBCOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
+)
+```
+
+
+
+```{r check_weights}
+cat("Weights add up to:", sum(ps_df$weights), "\n")
+cat("Population N: ", nrow(acs_pop))
+```
+
+
+If you'd like to re-scale the weights to add up to the sample size, you may do the following: 
+
+```{r}
+ps_scale_weights <- nrow(ps_df) * ps$weights / sum(ps$weights)
+cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
+```
+
+# Model Specification
+
+
+
+##  Multilevel regression
+
+Let i be individual, m be PUMA. We first fit logistic regression using NPS data. 
+
+$$\begin{aligned}
+y_i &\sim \text{Bernoulli}(p_i) \\
+\text{logit}(p_i) &=  \mathbf{x}_i^\top \boldsymbol{\beta}+ \alpha_{m[i]}\\
+   \alpha_m &\sim \text{Normal}(0, \sigma_{m})\qquad m = 1,\cdots, M = 281, \\
+
+\boldsymbol{\beta} &\sim \text{Normal}(0, \boldsymbol{\sigma_{\beta}})
+
+\end{aligned}$$
+
+Moderately informative priors $\sigma_{\beta} =2.5*sd(Y)/sd(X))$ are used for covariates baseed on prior specification in supplementary A.1.
+<span style="color: blue;"><i>J was used for PUMA and c was used for cells in the code. I changed the notation in the notes to use m for PUMA and j for cells, since Si (2023) uses j for cells and does not use areal level notation.</i></span>
+
+
+
+
+```{r ,eval=FALSE}
+getMRP=function(MR=nps,
+                ps=ps,
+                acs_pop=acs_pop,
+                WFPBB=FALSE,
+                L=5){
+  
+  # TRAINING DATA ----
+  nps_ca <- MR  # nps
+  
+  # lock factor levels from training
+  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX   <- factor(nps_ca$SEX)
+  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
+  PUMA_lev <- levels(factor(nps_ca$PUMA))  # lock PUMA levels
+  
+  # fixed-effects design 
+  X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
+  k <- ncol(X_train); n <- nrow(X_train)
+  y <- as.integer(nps_ca$PUBCOV)
+
+  
+
+  # n <- nrow(X_train)
+  # threads <- 4
+  # grainsize=as.integer(n / (threads))
+
+  #  data dependent prior for beta
+  sd_y <- stats::sd(as.numeric(y))
+  sd_x <- apply(X_train, 2, stats::sd)
+  sd_x[sd_x == 0] <- NA_real_   # or small number
+  beta_scale <- 2.5 * sd_y / sd_x
+  
+  stan_data <- list(
+    # training
+    n = n,
+    k = k,
+    X = X_train,
+    y = y,
+    grainsize = 16000,      
+    beta_scale = as.vector(beta_scale)
+    
+  )
+
+
+  fit <- mod$sample(
+    data = stan_data,
+    chains = 2,
+    parallel_chains = 2,
+    threads_per_chain = 4,
+    iter_warmup = 500,
+    iter_sampling = 1000,
+    seed = 123
+  )
+  
+  sum_tbl <- fit$summary()
+  
+  .......
+  
+  
+  
+```
+
+
+```{r show-stan, eval=FALSE}
+
+
+functions {
+  real bern_glm_ll_slice(array[] int y_slice, int start, int end,
+                         matrix X,
+                         vector beta) {
+    // intercept = 0 because X is built with ~ 0 + AGEP + SEX + RAC1P
+    return bernoulli_logit_glm_lpmf(y_slice | X[start:end, ], 0, beta);
+  }
+}
+
+data {
+  int<lower=1> n;
+  int<lower=1> k;
+  matrix[n, k] X;
+  array[n] int<lower=0, upper=1> y;
+  int<lower=1> grainsize;
+  vector<lower=0>[k] beta_scale;
+}
+
+parameters {
+  vector[k] beta;
+}
+
+model {
+  // Priors: β_j ~ Normal(0, beta_scale[j])
+  beta ~ normal(0, beta_scale);
+
+  // Likelihood
+  target += reduce_sum(bern_glm_ll_slice, y, grainsize, X, beta);
+}
+
+```
+
+
+
+
+##  Poststrification
+### using probability sample 
+Let s be posterior draw and j be cell build from probability sample, $w_j$ is sum of individual weight in the cell j.  
+\[p_{j,s} = \text{expit} \left( X_j^{\top} \beta_s \right)\]
+The PUMA-level estimate for area \( m \) is then
+\[
+\theta_{m,s}
+=
+\frac{
+\sum\limits_{j \in m} w_j \, p_{c,s}
+}{
+\sum\limits_{j \in m} w_j
+}.
+\]
+
+
+### using population 
+
+The same code are used, but cell is build using whole population i.e. acs_pop.
+
+
+
+```{r,eval=FALSE}
+# ---------- 1) Individuals to cells ----------
+.align_to_train <- function(df, train_ref, PUMA_lev) {
+  df$AGEP_binned  <- factor(df$AGEP_binned,  levels = levels(train_ref$AGEP_binned))
+  df$SEX   <- factor(df$SEX,   levels = levels(train_ref$SEX))
+  df$RAC1P <- factor(df$RAC1P, levels = levels(train_ref$RAC1P))
+  df$PUMA  <- factor(df$PUMA,  levels = PUMA_lev)
+  df
+}
+
+collapse_to_cells <- function(df, train_ref, PUMA_lev,
+                              design_formula = ~ 0 + AGEP_binned + SEX + RAC1P,
+                              weight_col = NULL) {
+  df <- .align_to_train(df, train_ref, PUMA_lev)
+  w <- if (!is.null(weight_col) && weight_col %in% names(df)) df[[weight_col]] else 1
+  w <- as.numeric(w); w[!is.finite(w) | w < 0] <- 0
+  
+  cells <- df |>
+    dplyr::mutate(W = w) |>
+    dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) |>
+    dplyr::summarise(w = sum(W), .groups = "drop")
+  
+  Xp <- model.matrix(design_formula, data = cells)
+  g  <- as.integer(cells$PUMA)                # 1..J
+  list(Xp = Xp, g = g, w = cells$w, cells = cells)
+}
+
+# ---------- 2) Extract CmdStanR draws ----------
+get_beta_draws <- function(fit) {
+  # S x K (format='matrix' gives draws as rows)
+  fit$draws("beta", format = "matrix")
+}
+
+# ---------- 3) poststrat by cell ----------
+poststrat_SxJ <- function(beta, Xp, g, w = NULL, J = max(g)) {
+  # beta: S x K   (posterior draws)
+  # Xp  : N x K   (prediction design matrix)
+  # g   : length-N integer group indices 1..J
+  # w   : length-N weights (if NULL, all 1)
+  # J   : number of groups (PUMAs)
+  
+  
+  N <- nrow(Xp)
+  S <- nrow(beta)
+  
+  # weights
+  if (is.null(w)) w <- rep(1, N) else w <- as.numeric(w)
+  w[!is.finite(w) | w < 0] <- 0
+  
+  # 1) Compute probabilities for *all cells × all draws*
+  #    result: (N x S)
+  eta <- Xp %*% t(beta)
+  p   <- plogis(eta)
+  
+  # 2) Pre-split indices and normalize weights by PUMA
+  idx_by_j <- split(seq_len(N), factor(g, levels = seq_len(J)))
+  w_norm <- lapply(idx_by_j, function(idx) {
+    if (length(idx) == 0) return(numeric(0))
+    sw <- sum(w[idx])
+    if (sw > 0) w[idx] / sw else rep(0, length(idx))
+  })
+  
+  # 3) Aggregate weighted means for each PUMA (S x J)
+  mu <- matrix(NA_real_, nrow = S, ncol = J)
+  for (j in seq_len(J)) {
+    idx <- idx_by_j[[j]]
+    if (length(idx) == 0) next
+    wj <- w_norm[[j]]
+    mu[, j] <- as.numeric(crossprod(wj, p[idx, , drop = FALSE]))
+  }
+  
+  mu  # (S x J)
+}
+
+  
+
+
+getMRP=function(MR=nps,
+                ps=ps,
+                acs_pop=acs_pop,
+                WFPBB=FALSE,
+                L=5
+                ){
+.....
+  
+ # TRAINING ref (to lock levels & PUMA order)
+  nps_ca <- MR
+  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX   <- factor(nps_ca$SEX)
+  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
+  PUMA_lev     <- levels(factor(nps_ca$PUMA))
+  J            <- length(PUMA_lev)
+  
+  # Collapse Ps and Pop to cells (huge speed/memory win)
+  ps_cells  <- collapse_to_cells(ps,      nps_ca, PUMA_lev, weight_col = "PWGTP")
+  pop_cells <- collapse_to_cells(acs_pop, nps_ca, PUMA_lev, weight_col = "PWGTP")
+  
+  beta <- get_beta_draws(fit)   # S x K
+  
+  mu_ps_draws  <- if (nrow(ps_cells$Xp)  > 0)
+    poststrat_SxJ(beta, ps_cells$Xp,  ps_cells$g,  ps_cells$w,  J) else
+      matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  
+  mu_pop_draws <- if (nrow(pop_cells$Xp) > 0)
+    poststrat_SxJ(beta=beta, 
+                  Xp=pop_cells$Xp, 
+                  g=pop_cells$g, 
+                  w=pop_cells$w, 
+                  J=J) else
+      matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  
+
+  puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-r")
+  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
+
+  return(list(
+    puma_summary_mrpr=puma_summary_mrpr,
+    puma_summary_mrpp=puma_summary_mrpp,
+    puma_summary_mrpr_WFPBB=puma_summary_mrpr_WFPBB,
+    rhat=sum_tbl$rhat
+  ))
+  
+}
+
+```
+
+
+
+
+# Fit Model
+
+```{r compile-model}
+mod <- cmdstan_model(
+  here("code/models", "si2.stan"),
+  cpp_options = list(stan_threads = TRUE))
+source(here("code/models","mrp_all.R"))
+```
+
+```{r fit-model, cache=TRUE}
+# start_time <- Sys.time()
+# fit <- [your fitting function]
+# cat("Fitted in", round(Sys.time() - start_time, 2), "seconds\n")
+
+
+start_time <- Sys.time()
+ # ps_df <- acs_pop[ps$idx, ] %>%
+ #    mutate(weights = ps$weights)
+tryCatch(
+  {
+    mrp <- getMRP(
+      MR = nps_df,
+      ps = ps_df,
+      acs_pop = acs_pop,
+      WFPBB=F,
+      L=5
+    )
+    
+    mrp_time <- Sys.time() - start_time
+    cat("✅ getMRP completed in", round(mrp_time, 2), attr(mrp_time, "units"), "\n")
+    
+    # Post Stratification results (MRP-R & MRP-P)
+    rhat<-mrp$rhat
+    mrpra <- mrp$puma_summary_mrpr
+    mrppb <- mrp$puma_summary_mrpp
+    # mrppc <- mrp$puma_summary_mrpr_WFPBB
+    cat("- MRP-R results:", nrow(mrpra), "PUMAs\n")
+    cat("- MRP-P results:", nrow(mrppb), "PUMAs\n")
+  },
+  error = function(e) {
+    cat("❌ getMRP failed:", e$message, "\n")
+  }
+)
+
+
+```
+
+# Results
+
+```{r diagnostics}
+range(mrp$rhat)
+```
+
+```{r extract-estimates}
+# Extract your model's PUMA-level estimates
+# Create a data frame with columns: PUMA, point_est, lower_CI, upper_CI, model
+# Example:
+# your_model_results <- data.frame(
+#   PUMA = ...,
+#   point_est = ...,
+#   lower_CI = ...,
+#   upper_CI = ...,
+#   model = "your_model_name"
+# )
+```
+
+# Performance Comparison
+
+## Calculate True Values and Direct Estimates
+
+```{r true-values}
+library(survey)
+
+# Calculate true population values by PUMA (what we're trying to estimate)
+response_var <- "PUBCOV"  # or whatever response variable you're using
+alpha <- 0.05
+
+true_values <- acs_pop %>%
+  group_by(PUMA) %>%
+  summarize(
+    response_true = mean(.data[[response_var]], na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r direct-estimates}
+# Add weights to PS sample (from test_sample.RData, ps contains weights)
+ps_df <- ps_df %>%
+  mutate(weights = ps$weights)
+
+# Create survey design
+samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps_df)
+
+# Calculate direct estimates by PUMA with standard errors
+direst <- svyby(
+  as.formula(paste0("~", response_var)),
+  ~PUMA,
+  samp.design,
+  svymean,
+  na.rm = TRUE,
+  vartype = "se",
+  keep.names = FALSE
+) %>%
+  arrange(PUMA) %>%
+  transmute(
+    PUMA,
+    point_est = .data[[response_var]],
+    lower_CI = point_est + qnorm(alpha / 2) * se,
+    upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+    model = "direst"
+  )
+```
+
+## Calculate Performance Metrics
+
+```{r performance-metrics}
+# Helper function for interval score (from main.R)
+int_score <- function(alpha, y, lower, upper) {
+  (upper - lower) +
+    (2 / alpha) * (lower - y) * (y < lower) +
+    (2 / alpha) * (y - upper) * (y > upper)
+}
+
+# Combine your model results with direct estimates
+all_results <- bind_rows(direst, mrppb,mrpra)
+# 
+# Calculate performance metrics for all models
+performance_metrics <- true_values %>%
+  left_join(all_results, by = "PUMA") %>%  # Replace 'direst' with 'all_results' when you have your model
+  group_by(model) %>%
+  summarize(
+    MSE = mean((response_true - point_est)^2),
+    MAB = mean(abs(response_true - point_est)),
+    Coverage = mean(between(response_true, lower_CI, upper_CI)),
+    `Int. Score` = mean(int_score(alpha, response_true, lower_CI, upper_CI)),
+    .groups = "drop"
+  )
+
+performance_metrics
+```
+
+## Visualize Estimates vs Truth
+
+```{r visualize}
+# Plot estimates vs truth for direct estimates (and your model)
+ggplot(true_values %>% left_join(all_results, by = "PUMA"),
+       aes(x = response_true, y = point_est)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), alpha = 0.3) +
+  facet_wrap(~model)+
+  labs(
+    title = "Direct Estimates vs True PUMA Values",
+    x = "True PUBCOV Rate",
+    y = "Estimated PUBCOV Rate"
+  ) +
+  theme_minimal()
+
+# After fitting your model, add facet_wrap(~model) to compare multiple methods
+```

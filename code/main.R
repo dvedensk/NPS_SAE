@@ -232,13 +232,15 @@ for (sim in 1:Nsim) {
     MR = nps,
     ps = ps,
     acs_pop = acs_pop,
-    mod = modINT
+    mod = modINT,
+    adjust=T
   )
 
 
   #  mrp_int
   mrpint <- mrp1$puma_summary_mrpp
-
+  mrpint <- mrp1$puma_summary_mrpr
+  
 
 
 

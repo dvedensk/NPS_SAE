@@ -4,5 +4,4 @@ data
 *.Rproj
 .Rhistory
 .DS_Store
-.RDataTmp
 *.pdf

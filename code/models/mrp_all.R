@@ -1,423 +1,625 @@
-#' Multilevel Regression and Poststratification (MRP)
-#'
-#' Computes BOTH MRP-R and MRP-P estimates in a single Stan model run.
-#'
-#' @description
-#' Fits a hierarchical logistic regression model to nonprobability sample data,
-#' then post-stratifies predictions in TWO ways:
-#'   1. MRP-R: Post-stratifies over probability sample (ps) cells, weighted by PWGTP
-#'   2. MRP-P: Post-stratifies over full population (acs_pop) cells, equally weighted
-#'
-#' The Stan model (si2.stan) computes both estimates in its generated quantities block.
-#'
-#' @param MR Nonprobability sample data frame (e.g., nps) with outcome HICOV
-#' @param ps Probability sample data frame for MRP-R post-stratification (must have PWGTP)
-#' @param acs_pop Full population data frame for MRP-P post-stratification
-#'
-#' @return List with two data frames:
-#'   - puma_summary_mrpr: MRP-R estimates (post-strat on ps)
-#'   - puma_summary_mrpp: MRP-P estimates (post-strat on acs_pop)
-#'
-#' @details
-#' Model: HICOV ~ AGEP + SEX + RAC1P + (1|PUMA)
-#' Post-stratification cells: All unique combinations of (AGEP, SEX, RAC1P, PUMA)
-#'                            from either ps (for MRP-R) or acs_pop (for MRP-P)
-getMRP <- function(MR = nps,
-                   ps = ps,
-                   acs_pop = acs_pop) {
-  ## 0) PREPARE TRAINING DATA --------------------------------------------
-  nps_ca <- MR # nps
 
+## MRP
+# ---------- 1) individuals to cells ----------
+.align_to_train <- function(df, train_ref, PUMA_lev) {
+  df$AGEP_binned  <- factor(df$AGEP_binned,  levels = levels(train_ref$AGEP_binned))
+  df$SEX   <- factor(df$SEX,   levels = levels(train_ref$SEX))
+  df$RAC1P <- factor(df$RAC1P, levels = levels(train_ref$RAC1P))
+  df$PUMA  <- factor(df$PUMA,  levels = PUMA_lev)
+  df
+}
+
+collapse_to_cells <- function(df, train_ref, PUMA_lev,
+                              design_formula = ~ 0 + AGEP_binned + SEX + RAC1P,
+                              weight_col = NULL) {
+  df <- .align_to_train(df, train_ref, PUMA_lev)
+  w <- if (!is.null(weight_col) && weight_col %in% names(df)) df[[weight_col]] else 1
+  w <- as.numeric(w); w[!is.finite(w) | w < 0] <- 0
+  
+  cells <- df |>
+    dplyr::mutate(W = w) |>
+    dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) |>
+    dplyr::summarise(w = sum(W), .groups = "drop")
+  
+  Xp <- model.matrix(design_formula, data = cells)
+  g  <- as.integer(cells$PUMA)                # 1..J
+  list(Xp = Xp, g = g, w = cells$w, cells = cells)
+}
+
+# ---------- 2) extract CmdStanR draws ----------
+get_beta_draws <- function(fit) {
+  # S x K (format='matrix' gives draws as rows)
+  fit$draws("beta", format = "matrix")
+}
+
+get_apuma_draws <- function(fit) {
+  ap <- fit$draws("a_puma", format = "matrix")  # S x J (as columns a_puma[1]...)
+  ap
+}
+# ---------- 3) poststrat by cell ----------
+poststrat_SxJ <- function(beta, a_puma,Xp, g, w = NULL, J = max(g)) {
+  # beta: S x K   (posterior draws)
+  # Xp  : N x K   (prediction design matrix)
+  # g   : length-N integer group indices 1..J
+  # w   : length-N weights (if NULL, all 1)
+  # J   : number of groups (PUMAs)
+  
+  
+  N <- nrow(Xp)
+  S <- nrow(beta)
+  
+  # weights
+  if (is.null(w)) w <- rep(1, N) else w <- as.numeric(w)
+  w[!is.finite(w) | w < 0] <- 0
+  
+  # 1) Compute probabilities for *all cells × all draws*
+  #    result: (N x S)
+  eta <- Xp %*% t(beta)
+  # Add random intercept per cell: for each cell i, add a_puma[, g[i]] (length S)
+  # a_puma[, g] gives S x N, transpose -> N x S
+  eta <- eta + t(a_puma[, g, drop = FALSE])
+  
+  p   <- plogis(eta)# N x S
+  
+  # 2) Pre-split indices and normalize weights by PUMA
+  idx_by_j <- split(seq_len(N), factor(g, levels = seq_len(J)))
+  w_norm <- lapply(idx_by_j, function(idx) {
+    if (length(idx) == 0) return(numeric(0))
+    sw <- sum(w[idx])
+    if (sw > 0) w[idx] / sw else rep(0, length(idx))
+  })
+  
+  # 3) Aggregate weighted means for each PUMA (S x J)
+  mu <- matrix(NA_real_, nrow = S, ncol = J)
+  for (j in seq_len(J)) {
+    idx <- idx_by_j[[j]]
+    if (length(idx) == 0) next
+    wj <- w_norm[[j]]
+    mu[, j] <- as.numeric(crossprod(wj, p[idx, , drop = FALSE]))
+  }
+  
+  mu  # (S x J)
+}
+
+# ---------- 4) summary ----------
+
+make_summary <- function(draw_mat, puma_names, tag) {
+  draw_mat[!is.finite(draw_mat)] <- NA_real_
+  tibble::tibble(PUMA = puma_names) |>
+    dplyr::bind_cols(as.data.frame(t(apply(draw_mat, 2, function(d) {
+      qs <- stats::quantile(d, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
+      c(point_est = mean(d, na.rm = TRUE),
+        sd        = stats::sd(d,   na.rm = TRUE),
+        lower_CI  = qs[1],
+        upper_CI  = qs[2])
+    })))) |>
+    dplyr::mutate(model = tag, .before = 1)
+}
+
+
+# ---------- 5) getMRP---------- 
+
+getMRP=function(MR=nps,
+                ps=ps,
+                acs_pop=acs_pop,
+                WFPBB=FALSE,
+                L=5,
+                threads=4){
+
+  # TRAINING DATA ----
+  nps_ca <- MR  # nps
+  
   # lock factor levels from training
-  nps_ca$AGEP <- factor(nps_ca$AGEP)
-  nps_ca$SEX <- factor(nps_ca$SEX)
+  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX   <- factor(nps_ca$SEX)
   nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  PUMA_lev <- levels(factor(nps_ca$PUMA)) # lock PUMA levels
-
-  # fixed-effects design
-  X_train <- model.matrix(~ 0 + AGEP + SEX + RAC1P, data = nps_ca)
+  PUMA_lev <- levels(factor(nps_ca$PUMA))  # lock PUMA levels
+  
+  # fixed-effects design 
+  X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
   k <- ncol(X_train)
   n <- nrow(X_train)
-  y <- as.integer(nps_ca$HICOV)
-  group <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
+  y <- as.integer(nps_ca$PUBCOV)
+
+
+  #threads <- 4
+  grainsize=as.integer(n / (threads))
+
+  #  data dependent prior for beta
+  sd_y <- stats::sd(as.numeric(y))
+  sd_x <- apply(X_train, 2, stats::sd)
+  sd_x[sd_x == 0] <- NA_real_   # or small number
+  beta_scale <- 2.5 * sd_y / sd_x
+  
+  
+  puma_id <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
   J <- length(PUMA_lev)
-
-  ## 1) HELPER FUNCTION FOR PREDICTION MATRICES ------------------------------
-  # Helper to build prediction matrices that EXACTLY match training columns
-  mk_pred <- function(df, X_train_cols, PUMA_lev, train_ref) {
-    if (is.null(df) || nrow(df) == 0) {
-      # return empty structures with correct shapes/types
-      return(list(
-        N = 0,
-        X = matrix(0, 0, length(X_train_cols), dimnames = list(NULL, X_train_cols)),
-        g = integer(0),
-        df_out = df[0, , drop = FALSE]
-      ))
-    }
-    df$AGEP <- factor(df$AGEP, levels = levels(train_ref$AGEP))
-    df$SEX <- factor(df$SEX, levels = levels(train_ref$SEX))
-    df$RAC1P <- factor(df$RAC1P, levels = levels(train_ref$RAC1P))
-    df$PUMA <- factor(df$PUMA, levels = PUMA_lev)
-
-    Xp <- model.matrix(~ 0 + AGEP + SEX + RAC1P, data = df)
-    # add any missing training columns (if some levels absent in this df)
-    miss <- setdiff(X_train_cols, colnames(Xp))
-    if (length(miss)) {
-      Xp <- cbind(Xp, matrix(0, nrow(Xp), length(miss),
-        dimnames = list(NULL, miss)
-      ))
-    }
-    # order columns to match training
-    Xp <- Xp[, X_train_cols, drop = FALSE]
-
-    list(
-      N = nrow(Xp),
-      X = Xp,
-      g = as.integer(df$PUMA),
-      df_out = df
-    )
-  }
-
-  ## 2) BUILD POST-STRATIFICATION CELLS --------------------------------------
-  # This is where post-stratification cells are defined!
-  # Cells = all unique combinations of (AGEP, SEX, RAC1P, PUMA) in each dataset
-
-  # MRP-R: Post-stratification cells from probability sample
-  # - Uses actual ps data rows as cells
-  # - Each cell weighted by PWGTP (survey design weight)
-  # - Accounts for sampling design but treats ps as fixed (no WFPBB)
-  ps_b <- mk_pred(ps, colnames(X_train), PUMA_lev, nps_ca)
-  w_ps <- ps$PWGTP[match(rownames(ps_b$X), rownames(ps))]
-
-  # MRP-P: Post-stratification cells from full population
-  # - Uses actual acs_pop data rows as cells
-  # - Each cell weighted equally (w=1)
-  # - Treats population as known/fixed
-  p_b <- mk_pred(acs_pop, colnames(X_train), PUMA_lev, nps_ca)
-  w_pop <- rep(1, p_b$N)
-
-  ## 3) ASSEMBLE STAN DATA ---------------------------------------------------
+  
   stan_data <- list(
-    # training
     n = n,
     k = k,
     X = X_train,
     y = y,
     J = J,
-    group = group,
-    grainsize = 500 # choose 250–1000; tune for speed
-    #
-    # # Ps (probability-sample poststratification)
-    # Nps = ps_b$N,
-    # Xps = ps_b$X,
-    # group_ps = ps_b$g,
-    #
-    # # P (full-population poststratification)
-    # Npop = p_b$N,
-    # Xpop = p_b$X,
-    # group_pop = p_b$g
+    puma_id = puma_id,
+    grainsize = grainsize,
+    beta_scale = as.vector(beta_scale)
   )
+  
 
-
-  stan_data <- c(stan_data, list(
-    Nps = ps_b$N, Xps = ps_b$X, group_ps = ps_b$g, w_ps = as.vector(w_ps),
-    Npop = p_b$N, Xpop = p_b$X, group_pop = p_b$g, w_pop = as.vector(w_pop)
-  ))
-
-  ## 4) FIT STAN MODEL -------------------------------------------------------
+  
   fit <- mod$sample(
     data = stan_data,
     chains = 2,
     parallel_chains = 2,
     threads_per_chain = 4,
-    iter_warmup = 1000,
+    iter_warmup = 500,
     iter_sampling = 1000,
     seed = 123
-  ) # 176.1
+  )
+  
+  sum_tbl <- fit$summary()
+  
+  
+  # fit_glm <- rstanarm::stan_glm( #stan_glmer
+  #   PUBCOV ~ 0 + AGEP_binned + SEX + RAC1P+ WAGP+ACCESSINET, #(1|PUMA)
+  #   data   = nps_ca,
+  #   family = binomial(link = "logit"),
+  #   chains = 2,
+  #   iter   = 1500,
+  #   warmup = 500,
+  #   cores  = 2,
+  #   seed   = 123
+  # )
 
-  ## 5) EXTRACT POST-STRATIFICATION RESULTS & SUMMARIZE ---------------------
-  # NOTE: Post-stratification happens inside Stan's generated quantities block!
-  # Stan computes weighted PUMA-level means using the cells we defined above:
-  #   - mu_ps:  MRP-R estimates (aggregates predictions over ps cells with PWGTP weights)
-  #   - mu_pop: MRP-P estimates (aggregates predictions over acs_pop cells equally)
-  # These are already PUMA-level summaries, not individual predictions
+  
+  # TRAINING ref (to lock levels & PUMA order)
+  nps_ca <- MR
+  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX   <- factor(nps_ca$SEX)
+  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
+  PUMA_lev     <- levels(factor(nps_ca$PUMA))
+  J            <- length(PUMA_lev)
+  
+  # Collapse Ps and Pop to cells (huge speed/memory win)
+  ps_cells  <- collapse_to_cells(ps,      nps_ca, PUMA_lev, weight_col = "weights")
+  pop_cells <- collapse_to_cells(acs_pop, nps_ca, PUMA_lev, weight_col = "weights")
+  
+  beta <- get_beta_draws(fit)   
+  apuma_draws <- get_apuma_draws(fit)
+  
+  mu_ps_draws  <- if (nrow(ps_cells$Xp)  > 0)
+    poststrat_SxJ(beta, apuma_draws, ps_cells$Xp,  ps_cells$g,  ps_cells$w,  J) else
+      matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  
+  mu_pop_draws <- if (nrow(pop_cells$Xp) > 0)
+    poststrat_SxJ(beta=beta, 
+                  apuma_draws,
+                  Xp=pop_cells$Xp, 
+                  g=pop_cells$g, 
+                  w=pop_cells$w, 
+                  J=J) else
+                    matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  
 
-  # Extract PUMA-level draws from Stan's generated quantities
-  # mu_ps:  MRP-R PUMA means (post-stratified over ps with PWGTP weights)
-  # mu_pop: MRP-P PUMA means (post-stratified over acs_pop with equal weights)
-  p_ps_draws <- fit$draws("mu_ps", format = "matrix")   # S x Nps
-  p_pop_draws <- fit$draws("mu_pop", format = "matrix") # S x Npop
-
-  make_summary <- function(draw_mat, puma_names, tag) {
-    draw_mat[!is.finite(draw_mat)] <- NA_real_
-    tibble(PUMA = puma_names) |>
-      bind_cols(as.data.frame(t(apply(draw_mat, 2, function(d) {
-        qs <- quantile(d, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
-        c(
-          point_est = mean(d, na.rm = TRUE),
-          sd = sd(d, na.rm = TRUE),
-          lower_CI = qs[1],
-          upper_CI = qs[2]
+  puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-r")
+  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
+  
+  
+  if(WFPBB){
+    index_list <- vector("list", L)
+    system.time({
+      for (l in 1:L) {
+        index_list[[l]] <- MSIMST::WFPBB(
+          y = 1:nrow(ps),
+          w = ps$weights,
+          N = sum(ps$weights),
+          n = nrow(ps),
+          verbatim = FALSE
         )
-      })))) |>
-      mutate(model = tag, .before = 1)
+        print(paste("Now generate WFPBB", l))
+      }
+    })
+    ps_star <- ps[unlist(index_list), ]
+    ps_star_cells <- collapse_to_cells(ps_star, nps_ca, PUMA_lev, weight_col = "weights")
+    
+    # Build Ps (probability-sample poststrat) block
+    ps_b_star <- mk_pred(ps_star, colnames(X_train), PUMA_lev, nps_ca)  
+    w_ps_star <- ps_star$weights[match(rownames(ps_b_star$X), rownames(ps_star))]  
+    
+    mu_star_draws <- if (nrow(ps_star_cells$Xp) > 0)
+      poststrat_SxJ(beta=beta, 
+                    Xp=ps_star_cells$Xp, 
+                    g=ps_star_cells$g, 
+                    w=ps_star_cells$w, 
+                    J=J) else
+                      matrix(NA_real_, nrow = nrow(beta), ncol = J)
+    
+    puma_summary_mrpr_WFPBB <- make_summary(mu_star_draws,  PUMA_lev, "mrp-r-WFPBB")
+    
+    
+  }else{
+    puma_summary_mrpr_WFPBB=NULL
   }
-
-  puma_summary_mrpr <- make_summary(p_ps_draws, PUMA_lev, "mrp-r")
-  puma_summary_mrpp <- make_summary(p_pop_draws, PUMA_lev, "mrp-p")
-
+  
+  
   return(list(
-    puma_summary_mrpr = puma_summary_mrpr,
-    puma_summary_mrpp = puma_summary_mrpp
+    puma_summary_mrpr=puma_summary_mrpr,
+    puma_summary_mrpp=puma_summary_mrpp,
+    puma_summary_mrpr_WFPBB=puma_summary_mrpr_WFPBB,
+    rhat=sum_tbl$rhat
   ))
+  
+}
+
+## MRP_INT
+# ---------- 0) tiny utilites ----------  
+
+
+bin_fun <- function(p, digits = 2) round(p, digits = digits)
+# map_bins <- function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+
+#round(p, 1)  may end up only has two groups if inclusion probs are small
+.align_to_train <- function(df, train_ref, PUMA_lev) {
+  df$AGEP_binned  <- factor(df$AGEP_binned,  levels = levels(train_ref$AGEP_binned))
+  df$SEX   <- factor(df$SEX,   levels = levels(train_ref$SEX))
+  df$RAC1P <- factor(df$RAC1P, levels = levels(train_ref$RAC1P))
+  df$PUMA  <- factor(df$PUMA,  levels = PUMA_lev)
+  df
+}
+
+# ---------- 1) individuals to cells ----------
+
+collapse_to_cells_int <- function(df, train_ref, PUMA_lev,
+                                  psi_vec,
+                                  psi_bin_vec,
+                                  design_formula = ~ 0 + AGEP_binned + SEX + RAC1P,
+                                  weight_col = NULL,
+                                  bin_map = bin_map,
+                                  map_bins = function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])) {
+  
+  df <- .align_to_train(df, train_ref, PUMA_lev)
+  
+  w <- if (!is.null(weight_col) && weight_col %in% names(df)) df[[weight_col]] else 1
+  w <- as.numeric(w); w[!is.finite(w) | w < 0] <- 0
+  
+  if (length(psi_vec) != nrow(df) || length(psi_bin_vec) != nrow(df)) {
+    stop("psi_vec and psi_bin_vec must have length nrow(df)")
+  }
+  df$psi     <- as.numeric(psi_vec)
+  df$psi_bin <- as.integer(psi_bin_vec)
+  
+  # critical: PUMA levels locked
+  df$PUMA <- factor(df$PUMA, levels = PUMA_lev)
+  
+  cells <- df |>
+    dplyr::mutate(W = w) |>
+    dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) |>
+    dplyr::summarise(
+      w   = sum(W),
+      psi = mean(psi),
+      .groups = "drop"
+    )
+  
+  cells$PUMA <- factor(cells$PUMA, levels = PUMA_lev)
+  
+  # recompute bins from cell-mean psi (your logic)
+  cells$psi_bin <- map_bins(bin_fun(cells$psi,digits = 2))
+  
+  Xp <- model.matrix(design_formula, data = cells)
+  g  <- as.integer(cells$PUMA)
+  if (anyNA(g)) stop("Some cells have PUMA not in PUMA_lev -> NA group id.")
+  
+  list(Xp = Xp, g = g, w = cells$w, psi = cells$psi, psi_bin = cells$psi_bin, cells = cells)
+}
+
+# ---------- 2) Extract CmdStanR draws ----------
+get_params_int_draws <- function(fit) {
+  list(
+    beta     = fit$draws("beta", format = "matrix"),      # S x K
+    beta_psi = as.numeric(fit$draws("beta_psi", format = "matrix")),  # S
+    zeta     = fit$draws("zeta", format = "matrix"),      # S x G
+    a_puma   = fit$draws("a_puma", format = "matrix")     # S x J
+  )
+}
+
+# ---------- 3) poststrat by cell ----------
+poststrat_int_SxJ <- function(beta, beta_psi, zeta, a_puma,
+                              Xp, g, psi, psi_bin, w = NULL, J = max(g)) {
+  N <- nrow(Xp)
+  S <- nrow(beta)
+  
+  if (is.null(w)) w <- rep(1, N) else w <- as.numeric(w)
+  w[!is.finite(w) | w < 0] <- 0
+  
+  lp <- qlogis(pmin(pmax(psi, 1e-6), 1 - 1e-6))  # N
+  
+  # N x S components
+  eta <- Xp %*% t(beta)                                  # fixed
+  eta <- eta + tcrossprod(lp, beta_psi)                  # selection slope
+  eta <- eta + t(zeta[, psi_bin, drop = FALSE])          # psi-bin 
+  eta <- eta + t(a_puma[, g, drop = FALSE])              # PUMA
+  
+  p <- plogis(eta)  # N x S
+  
+  idx_by_j <- split(seq_len(N), factor(g, levels = seq_len(J)))
+  mu <- matrix(NA_real_, nrow = S, ncol = J)
+  
+  for (j in seq_len(J)) {
+    idx <- idx_by_j[[j]]
+    if (length(idx) == 0) next
+    sw <- sum(w[idx])
+    wj <- if (sw > 0) w[idx] / sw else rep(0, length(idx))
+    mu[, j] <- as.numeric(crossprod(wj, p[idx, , drop = FALSE]))
+  }
+  mu
 }
 
 
-#' MRP with Integrated Weighting (MRP-INT)
-#'
-#' MRP with selection bias correction via inclusion probability modeling.
-#'
-#' @description
-#' Extends standard MRP by:
-#'   1. Estimating inclusion probabilities (propensity to be in nonprob sample)
-#'      using stacked nonprob + prob samples (following Valliant 2019)
-#'   2. Including propensity scores in the outcome model as:
-#'      - Linear term: beta_psi * logit(psi)
-#'      - Categorical adjustment: random effects by propensity bin
-#'   3. Post-stratifying over full population (acs_pop) cells
-#'
-#' This provides doubly-robust protection against model misspecification
-#' (Si 2023, Section 2.3).
-#'
-#' @param MR Nonprobability sample data frame with outcome HICOV
-#' @param ps Probability sample data frame (used to estimate inclusion probabilities)
-#' @param acs_pop Full population data frame for post-stratification
-#' @param mod Compiled Stan model object (mrp_int2.stan)
-#'
-#' @return List with:
-#'   - puma_summary_mrpp: MRP-INT estimates (post-strat on acs_pop)
-#'   - fit: Full Stan fit object
-#'   - psi_bins: Propensity score binning information
-#'   - rhat: Convergence diagnostics
-#'
-#' @details
-#' Model: HICOV ~ AGEP + SEX + RAC1P + (1|PUMA) + beta_psi*logit(psi) + (1|psi_bin)
-#' Inclusion probability model: P(in nonprob sample) ~ AGEP + SEX + RAC1P + PUMA
-#' Post-stratification cells: All unique combinations in acs_pop
+
+# ---------- 4) getMRP_INT---------- 
 getMRP_INT <- function(MR,
                        ps,
                        acs_pop,
-                       mod = mod) {
-  grainsize <- 500
-  bin_fun <- function(p) round(p, 1)
-  psi_eps <- 1e-6
-
-  ## 0) PREPARE TRAINING DATA --------------------------------------------
-  # lock factor levels from training
+                       mod = mod,
+                       adjust=TRUE,
+                       threads=4
+) {
+  
+  
+  # ps$PWGTP<-ps$weights
+  
+  
+  psi_eps = 1e-6
+  
+  ## 0) LOCK LEVELS FROM TRAINING --------------------------------------------
   nps_ca <- MR
-  nps_ca$AGEP <- factor(nps_ca$AGEP)
-  nps_ca$SEX <- factor(nps_ca$SEX)
+  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX   <- factor(nps_ca$SEX)
   nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  PUMA_lev <- levels(factor(nps_ca$PUMA))
-
+  PUMA_lev     <- levels(factor(nps_ca$PUMA))  
+  J            <- length(PUMA_lev) 
+  
   # Fixed-effects design (no intercept; matches Stan)
-  X_train <- model.matrix(~ 0 + AGEP + SEX + RAC1P, data = nps_ca)
+  X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
   k <- ncol(X_train)
   n <- nrow(X_train)
-  y <- as.integer(nps_ca$HICOV)
-
-  group <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
-  J <- length(PUMA_lev)
-
-  ## Helper to rebuild prediction matrices & group using training levels
-  mk_pred <- function(df, X_train_cols, PUMA_lev, train_ref) {
-    if (is.null(df) || nrow(df) == 0) {
-      return(list(
-        N = 0,
-        X = matrix(0, 0, length(X_train_cols), dimnames = list(NULL, X_train_cols)),
-        g = integer(0),
-        df = df[0, , drop = FALSE]
-      ))
-    }
-    df$AGEP <- factor(df$AGEP, levels = levels(train_ref$AGEP))
-    df$SEX <- factor(df$SEX, levels = levels(train_ref$SEX))
-    df$RAC1P <- factor(df$RAC1P, levels = levels(train_ref$RAC1P))
-    df$PUMA <- factor(df$PUMA, levels = PUMA_lev)
-
-    Xp <- model.matrix(~ 0 + AGEP + SEX + RAC1P, data = df)
-
-    miss <- setdiff(colnames(X_train_cols), colnames(Xp))
-    if (length(miss)) {
-      Xp <- cbind(Xp, matrix(0, nrow(Xp), length(miss),
-        dimnames = list(NULL, miss)
-      ))
-    }
-    Xp <- Xp[, X_train_cols, drop = FALSE]
-    list(N = nrow(Xp), X = Xp, g = as.integer(df$PUMA), df = df)
-  }
-
-  ## 1) ESTIMATE INCLUSION PROBABILITIES (Selection Model) -------------------
-  # Following Valliant (2019) approach:
-  # Step 1: Stack nonprob sample (S=1) with prob sample (S=0)
-  # Step 2: Weight prob sample by PWGTP, nonprob sample by 1
-  # Step 3: Fit weighted logistic regression P(S=1 | covariates)
-  #
-  # This estimates: P(unit is in nonprobability sample | AGEP, SEX, RAC1P, PUMA)
-  # These are the "inclusion probabilities" or "propensity scores" (psi)
-
-  sel_MR <- nps_ca[, c("AGEP", "SEX", "RAC1P", "PUMA")]
-  sel_MR$S <- 1L # Nonprob sample indicator
-
-  sel_ps <- ps[, c("AGEP", "SEX", "RAC1P", "PUMA", "PWGTP")]
-  sel_ps$S <- 0L # Prob sample indicator
-
-  # Align factor levels to training
+  y <- as.integer(nps_ca$PUBCOV)
+  
+  
+  
+  ## 1) SELECTION MODEL --------------------------------------------
+  # Build a clean selection dataset with shared covariates
+  sel_MR <- nps_ca[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")]
+  sel_MR$S <- 1L
+  sel_ps <- ps[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "weights")]
+  sel_ps$S <- 0L
+  
+  # Align factor levels to training for selection model too
   align_levels <- function(df) {
-    df$AGEP <- factor(df$AGEP, levels = levels(nps_ca$AGEP))
-    df$SEX <- factor(df$SEX, levels = levels(nps_ca$SEX))
+    df$AGEP  <- factor(df$AGEP_binned,  levels = levels(nps_ca$AGEP_binned))
+    df$SEX   <- factor(df$SEX,   levels = levels(nps_ca$SEX))
     df$RAC1P <- factor(df$RAC1P, levels = levels(nps_ca$RAC1P))
-    df$PUMA <- factor(df$PUMA, levels = PUMA_lev)
+    df$PUMA  <- factor(df$PUMA,  levels = PUMA_lev)
     df
   }
   sel_MR <- align_levels(sel_MR)
   sel_ps <- align_levels(sel_ps)
-
-  # Stack: nonprob (weight=1) + prob (weight=PWGTP)
+  
   sel_dat <- rbind(
-    cbind(sel_MR, PWGTP = 1),
+    cbind(sel_MR, weights = 1),
     sel_ps
   )
-
-  # Fit inclusion probability model
+  
+  if(adjust==TRUE){
+    ## 1) Estimated population size from PS
+    N_hat <- sum(sel_ps$weights)
+    ## 2) Size of nonprobability sample
+    n_np <- nrow(sel_MR)
+    ## 3) Adjustment factor
+    adj_factor <- (N_hat - n_np) / N_hat
+    ## 4) Adjust PS weights
+    sel_ps$weights <- sel_ps$weights * adj_factor
+    sel_MR$weights=1
+    sel_dat <- rbind(
+      sel_MR[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")],
+      sel_ps[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")]
+    ) 
+  }else{
+    adj_factor=NULL
+  }
+  
   sel_fit <- stats::glm(
-    S ~ AGEP + SEX + RAC1P + PUMA,
+    S ~ AGEP_binned + SEX + RAC1P, 
     data = sel_dat,
     family = binomial(),
-    weights = sel_dat$PWGTP
+    weights = sel_dat$weights
   )
-
+  
+  #bin_val is 0.11, 0.12, etc, psi is the predicted psi, using bin_val represents the random-effect group which is used during poststratification.
   predict_psi <- function(df) {
-    if (is.null(df) || nrow(df) == 0) {
-      return(list(psi = numeric(0), psi_bin = integer(0)))
-    }
+    if (is.null(df) || nrow(df) == 0) return(list(psi = numeric(0), psi_bin = integer(0)))
     df2 <- align_levels(df)
     p <- stats::predict(sel_fit, newdata = df2, type = "response")
-    p <- pmin(pmax(p, psi_eps), 1 - psi_eps)
-    list(psi = as.numeric(p), bin_val = bin_fun(p))
+    p <- pmin(pmax(p, psi_eps), 1 - psi_eps)#to avoid 0
+    list(psi = as.numeric(p), bin_val = bin_fun(p,digits = 2))
   }
-
-  # Predict inclusion probabilities for all datasets
-  psi_train <- predict_psi(nps_ca) # For training data
-  psi_ps <- predict_psi(ps) # For probability sample (not used in final output)
-  psi_pop <- predict_psi(acs_pop) # For population (used in MRP-INT post-strat)
-
-  # Propensity score binning: Creates discrete categories for hierarchical modeling
-  # - Bins propensities into ~11 groups: 0.0, 0.1, 0.2, ..., 1.0 (via round(p, 1))
-  # - Allows Stan to estimate random effects per bin (zeta[psi_bin])
-  # - More flexible than treating propensity as purely linear
+  
+  psi_train <- predict_psi(nps_ca)
+  psi_ps    <- predict_psi(ps)
+  psi_pop   <- predict_psi(acs_pop)
+  
+  # Build a consistent bin map across ALL datasets
   all_bin_vals <- unique(c(psi_train$bin_val, psi_ps$bin_val, psi_pop$bin_val))
   all_bin_vals <- sort(unique(all_bin_vals))
+  G <- length(all_bin_vals)
+  
+  
   bin_map <- setNames(seq_along(all_bin_vals), all_bin_vals)
-
   map_bins <- function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
 
+  
   psi_bin_train <- map_bins(psi_train$bin_val)
-  psi_bin_ps <- map_bins(psi_ps$bin_val)
-  psi_bin_pop <- map_bins(psi_pop$bin_val)
-  G <- length(all_bin_vals) # Number of unique propensity bins
+  psi_bin_ps    <- map_bins(psi_ps$bin_val)
+  psi_bin_pop   <- map_bins(psi_pop$bin_val)
 
-  ## 2) BUILD POST-STRATIFICATION CELLS (with propensity scores) -------------
-  # Post-stratification cells = all unique combinations in acs_pop
-  # Same as getMRP() but now each cell also has:
-  #   - Estimated inclusion probability (psi)
-  #   - Propensity bin assignment (psi_bin)
-  # These are used as predictors in the outcome model
-
-  ps_b <- mk_pred(ps, colnames(X_train), PUMA_lev, nps_ca)
-  p_b <- mk_pred(acs_pop, colnames(X_train), PUMA_lev, nps_ca)
-
-  # Weights (Note: MRP-INT only returns MRP-P style output, not MRP-R)
-  w_ps <- if (ps_b$N > 0) as.vector(ps$PWGTP) else numeric(0)
-  w_pop <- if (p_b$N > 0) rep(1, p_b$N) else numeric(0)
-
-  ## 3) ASSEMBLE STAN DATA FOR MRP-INT ---------------------------------------
+  
+  
+  
+  pop_cells <- collapse_to_cells_int(
+    df          = acs_pop,
+    train_ref   = nps_ca,
+    PUMA_lev    = PUMA_lev,
+    # psi_bin_val = psi_pop$bin_val, # 0.3
+    psi_vec     = psi_pop$psi,
+    psi_bin_vec = psi_bin_pop, # 3
+    weight_col  = "weights",
+    bin_map = bin_map,
+    map_bins= function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+    
+  )
+  
+  ps_cells <- collapse_to_cells_int(
+    df          = ps,
+    train_ref   = nps_ca,
+    PUMA_lev    = PUMA_lev,
+    psi_vec     = psi_ps$psi,
+    psi_bin_vec = psi_bin_ps, # 3
+    weight_col  = "weights",
+    bin_map = bin_map,
+    map_bins= function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+    
+  )
+  
+  
+  ## 2) MAKE STAN DATA FOR MRP-INT ---------------------------------------
+  # data-dependent prior scales
+  
+  # outcome sd (binary y)
+  sd_y <- stats::sd(as.numeric(y)) 
+  
+  # column-wise sd for X
+  sd_x <- apply(X_train, 2, stats::sd)
+  sd_x[sd_x == 0] <- NA_real_   
+  beta_scale <- 1 * (sd_y)  / sd_x 
+  # when 2.5 * sd_y / sd_x is used, warning:  Exception: bernoulli_logit_glm_lpmf: Intercept[1] is -inf, but must be finite!
+  # beta_scale[!is.finite(beta_scale)] <- 5
+  # beta_scale <- pmin(beta_scale, 5) # to avoid intercept[1]=inf
+  # 
+  beta_psi_scale <- 2.5 * (sd_y) / stats::sd(qlogis(psi_train$psi))
+  sigma_psi_rate <- 1 / sd_y   
+  
+  
+  n <- nrow(X_train)
+  # threads <- 4
+  grainsize=as.integer(n / (threads*4))
+  
+  puma_id_train <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
+  J <- length(PUMA_lev)
+  
+  
   stan_data <- list(
-    # Training
     n = n,
     k = k,
     X = X_train,
     y = y,
-    J = J,
-    group = group,
     grainsize = grainsize,
-
-    # psi for training (as probabilities; Stan takes logit() inside or we precompute there)
-    psi = as.vector(psi_train$psi),
+    lp_psi = qlogis(psi_train$psi),                  
     G = G,
     psi_bin = psi_bin_train,
-
-    # Ps (probability-sample poststratification; MRP-R summary)
-    Nps = ps_b$N,
-    Xps = ps_b$X,
-    group_ps = ps_b$g,
-    psi_ps = as.vector(psi_ps$psi),
-    psi_bin_ps = psi_bin_ps,
-    w_ps = w_ps,
-
-    # Pop (full-population poststratification; MRP-P summary)
-    Npop = p_b$N,
-    Xpop = p_b$X,
-    group_pop = p_b$g,
-    psi_pop = as.vector(psi_pop$psi),
-    psi_bin_pop = psi_bin_pop,
-    w_pop = w_pop
+    
+    
+    J = J,
+    puma_id = puma_id_train,
+    
+    beta_scale = as.vector(beta_scale),
+    beta_psi_scale = beta_psi_scale,
+    sigma_psi_rate = sigma_psi_rate
+    
+    # sigma_puma_rate = 1 / sd_y,
+    
+    
+    
   )
-
-  ## 4) FIT STAN (MRP-INT) ----------------------------------------------------
+  ## 3) FIT STAN (MRP-INT) ----------------------------------------------------
   fit <- mod$sample(
     data = stan_data,
     chains = 2,
     parallel_chains = 2,
-    threads_per_chain = 4,
-    iter_warmup = 1000,
-    iter_sampling = 1000,
-    seed = 123
+    threads_per_chain = threads,
+    iter_warmup = 500,
+    iter_sampling = 1000
+    # seed = 1233
   )
-
+  
+  
   sum_tbl <- fit$summary()
 
-
-
-  ## 5) COLLECT DRAWS & SUMMARIZE --------------------------------------------
-  # mu_ps_draws  <- fit$draws("mu_ps",  format = "matrix")
-  mu_pop_draws <- fit$draws("mu_pop", format = "matrix")
-
-  make_summary <- function(draw_mat, group_names, tag) {
-    draw_mat[!is.finite(draw_mat)] <- NA_real_
-    stats_fn <- function(d) {
-      qs <- stats::quantile(d, c(0.025, 0.975), na.rm = TRUE, names = FALSE)
-      c(
-        point_est = mean(d, na.rm = TRUE),
-        sd = stats::sd(d, na.rm = TRUE),
-        lower_CI = qs[1],
-        upper_CI = qs[2]
-      )
-    }
-    sm <- t(apply(draw_mat, 2, stats_fn))
-    out <- tibble::tibble(PUMA = group_names) |>
-      dplyr::bind_cols(as.data.frame(sm)) |>
-      dplyr::mutate(model = tag, .before = 1)
-    out
+  
+  ## 4) COLLECT DRAWS & SUMMARIZE --------------------------------------------
+  
+  # nps_ca <- MR
+  # nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  # nps_ca$SEX   <- factor(nps_ca$SEX)
+  # nps_ca$RAC1P <- factor(nps_ca$RAC1P)
+  # PUMA_lev     <- levels(factor(nps_ca$PUMA))
+  # J            <- length(PUMA_lev)
+  params <- get_params_int_draws(fit)
+  beta     <- params$beta
+  beta_psi <- params$beta_psi
+  zeta     <- params$zeta
+  a_puma   <- params$a_puma
+  
+  
+  
+  
+  # Pop poststrat (MRP-P with INT correction)
+  mu_pop_draws <- if (nrow(pop_cells$Xp) > 0) {
+    poststrat_int_SxJ(
+      beta = beta, 
+      beta_psi = beta_psi, 
+      zeta = zeta, 
+      a_puma = a_puma,
+      Xp = pop_cells$Xp, 
+      g = pop_cells$g, 
+      psi = pop_cells$psi,
+      psi_bin = pop_cells$psi_bin,
+      w = pop_cells$w,
+      J = J
+    )
+  } else {
+    matrix(NA_real_, nrow = nrow(beta), ncol = J)
   }
-
-  # puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-int-ps")
-  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-int")
-
+  
+  
+  mu_ps_draws <- if (nrow(pop_cells$Xp) > 0) {
+    poststrat_int_SxJ(
+      beta = beta, 
+      beta_psi = beta_psi, 
+      zeta = zeta, 
+      a_puma = a_puma,
+      Xp = ps_cells$Xp, 
+      g = ps_cells$g, 
+      psi = ps_cells$psi,
+      psi_bin = ps_cells$psi_bin,
+      w = ps_cells$w,
+      J = J
+    )
+  } else {
+    matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  }
+  
+  
+  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p-int")
+  puma_summary_mrpr <- make_summary(mu_ps_draws, PUMA_lev, "mrp-r-int")
+  
   list(
-    fit = fit,
-    # puma_summary_mrpr = puma_summary_mrpr,
+    fit          = fit,
     puma_summary_mrpp = puma_summary_mrpp,
-    psi_bins = list(values = all_bin_vals, map = bin_map),
-    rhat = sum_tbl$rhat
+    puma_summary_mrpr = puma_summary_mrpr,
+    psi_train     = psi_train,
+    rhat         = sum_tbl$rhat,
+    adj_factor   = adj_factor   
   )
 }
+
