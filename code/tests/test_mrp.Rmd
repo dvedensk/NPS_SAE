@@ -1,6 +1,6 @@
 ---
-title: "Model Testing Template"
-author: "Your Name"
+title: "Model Testing for MRP"
+author: "Qianyu Dong"
 date: "`r Sys.Date()`"
 output: 
   html_document:
@@ -78,16 +78,14 @@ cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
 
 Let i be individual, m be PUMA. We first fit logistic regression using NPS data. 
 
-$$
-\begin{aligned}
+$$\begin{aligned}
 y_i &\sim \text{Bernoulli}(p_i) \\
 \text{logit}(p_i) &=  \mathbf{x}_i^\top \boldsymbol{\beta}+ \alpha_{m[i]}\\
    \alpha_m &\sim \text{Normal}(0, \sigma_{m})\qquad m = 1,\cdots, M = 281, \\
 
 \boldsymbol{\beta} &\sim \text{Normal}(0, \boldsymbol{\sigma_{\beta}})
 
-\end{aligned}
-$$
+\end{aligned}$$
 
 Moderately informative priors $\sigma_{\beta} =2.5*sd(Y)/sd(X))$ are used for covariates baseed on prior specification in supplementary A.1.
 <span style="color: blue;"><i>J was used for PUMA and c was used for cells in the code. I changed the notation in the notes to use m for PUMA and j for cells, since Si (2023) uses j for cells and does not use areal level notation.</i></span>
