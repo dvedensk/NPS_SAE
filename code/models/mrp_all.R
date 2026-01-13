@@ -214,13 +214,13 @@ getMRP=function(MR=nps,
     cat("\nGenerating", L, "bootstrap samples for WFPBB...\n")
     system.time({
       for (l in 1:L) {
-        # Generate bootstrap sample l
-        boot_idx <- MSIMST::WFPBB(
-          y = 1:nrow(ps),
-          w = ps$weights,
-          N = sum(ps$weights),
-          n = nrow(ps),
-          verbatim = FALSE
+        # Generate bootstrap sample l using simple weighted bootstrap
+        # (much faster than MSIMST::WFPBB which fits a Bayesian model)
+        boot_idx <- sample(
+          1:nrow(ps),
+          size = nrow(ps),
+          replace = TRUE,
+          prob = ps$weights
         )
 
         # Resample THIS bootstrap replicate
