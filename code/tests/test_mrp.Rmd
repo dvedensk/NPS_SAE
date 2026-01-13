@@ -311,7 +311,7 @@ getMRP=function(MR=nps,
   J            <- length(PUMA_lev)
   
   # Collapse Ps and Pop to cells (huge speed/memory win)
-  ps_cells  <- collapse_to_cells(ps,      nps_ca, PUMA_lev, weight_col = "PWGTP")
+  ps_cells  <- collapse_to_cells(ps,      nps_ca, PUMA_lev, weight_col = "weights")
   pop_cells <- collapse_to_cells(acs_pop, nps_ca, PUMA_lev, weight_col = "PWGTP")
   
   beta <- get_beta_draws(fit)   # S x K
