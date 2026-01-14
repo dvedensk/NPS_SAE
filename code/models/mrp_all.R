@@ -107,7 +107,7 @@ getMRP=function(MR=nps,
                 threads=4){
 
   # Validate L parameter
-  if(bootstrap && (is.null(L) || L < 1)) {
+  if (bootstrap && (is.null(L) || L < 1)) {
     stop("L must be specified and >= 1 when bootstrap=TRUE")
   }
 
@@ -194,15 +194,20 @@ getMRP=function(MR=nps,
   apuma_draws <- get_apuma_draws(fit)
   
   mu_ps_draws  <- if (nrow(ps_cells$Xp)  > 0)
-    poststrat_SxJ(beta, apuma_draws, ps_cells$Xp,  ps_cells$g,  ps_cells$w,  J) else
+    poststrat_SxJ(beta=beta,
+                  a_puma=apuma_draws,
+                  Xp=ps_cells$Xp,
+                  g=ps_cells$g,
+                  w=ps_cells$w,
+                  J=J) else
       matrix(NA_real_, nrow = nrow(beta), ncol = J)
-  
+
   mu_pop_draws <- if (nrow(pop_cells$Xp) > 0)
-    poststrat_SxJ(beta=beta, 
-                  apuma_draws,
-                  Xp=pop_cells$Xp, 
-                  g=pop_cells$g, 
-                  w=pop_cells$w, 
+    poststrat_SxJ(beta=beta,
+                  a_puma=apuma_draws,
+                  Xp=pop_cells$Xp,
+                  g=pop_cells$g,
+                  w=pop_cells$w,
                   J=J) else
                     matrix(NA_real_, nrow = nrow(beta), ncol = J)
   
@@ -211,7 +216,7 @@ getMRP=function(MR=nps,
   puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
 
 
-  if(bootstrap){
+  if (bootstrap) {
     # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
     S <- nrow(beta)
     mu_boot_array <- array(NA_real_, dim = c(S, J, L))
@@ -253,7 +258,7 @@ getMRP=function(MR=nps,
     puma_summary_mrpr_bootstrap <- make_summary(mu_combined,  PUMA_lev, "mrp-r-bootstrap")
 
 
-  }else{
+  } else {
     puma_summary_mrpr_bootstrap=NULL
   }
   
@@ -384,7 +389,7 @@ getMRP_INT <- function(MR,
 ) {
 
   # Validate L parameter
-  if(bootstrap && (is.null(L) || L < 1)) {
+  if (bootstrap && (is.null(L) || L < 1)) {
     stop("L must be specified and >= 1 when bootstrap=TRUE")
   }
   
@@ -447,7 +452,7 @@ getMRP_INT <- function(MR,
       sel_MR[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")],
       sel_ps[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")]
     ) 
-  }else{
+  } else {
     adj_factor=NULL
   }
   
@@ -635,7 +640,7 @@ getMRP_INT <- function(MR,
   puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p-int")
   puma_summary_mrpr <- make_summary(mu_ps_draws, PUMA_lev, "mrp-r-int")
 
-  if(bootstrap){
+  if (bootstrap) {
     # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
     S <- nrow(beta)
     mu_boot_array <- array(NA_real_, dim = c(S, J, L))
@@ -694,7 +699,7 @@ getMRP_INT <- function(MR,
     mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
     puma_summary_mrpr_bootstrap <- make_summary(mu_combined, PUMA_lev, "mrp-r-int-bootstrap")
 
-  }else{
+  } else {
     puma_summary_mrpr_bootstrap=NULL
   }
 
