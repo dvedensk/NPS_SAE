@@ -103,8 +103,13 @@ getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
                 bootstrap=FALSE,
-                L=5,
+                L=100,
                 threads=4){
+
+  # Validate L parameter
+  if(bootstrap && (is.null(L) || L < 1)) {
+    stop("L must be specified and >= 1 when bootstrap=TRUE")
+  }
 
   # TRAINING DATA ----
   nps_ca <- MR  # nps
@@ -152,7 +157,7 @@ getMRP=function(MR=nps,
     data = stan_data,
     chains = 2,
     parallel_chains = 2,
-    threads_per_chain = 4,
+    threads_per_chain = threads,
     iter_warmup = 500,
     iter_sampling = 1000,
     seed = 123
@@ -374,9 +379,14 @@ getMRP_INT <- function(MR,
                        mod = mod,
                        adjust=TRUE,
                        bootstrap=FALSE,
-                       L=5,
+                       L=100,
                        threads=4
 ) {
+
+  # Validate L parameter
+  if(bootstrap && (is.null(L) || L < 1)) {
+    stop("L must be specified and >= 1 when bootstrap=TRUE")
+  }
   
   
   # ps$PWGTP<-ps$weights

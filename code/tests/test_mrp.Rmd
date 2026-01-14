@@ -98,7 +98,7 @@ getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
                 bootstrap=FALSE,
-                L=5){
+                L=100){
   
   # TRAINING DATA ----
   nps_ca <- MR  # nps
@@ -298,7 +298,7 @@ getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
                 bootstrap=FALSE,
-                L=5
+                L=100
                 ){
 .....
   
