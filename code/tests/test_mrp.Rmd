@@ -97,7 +97,7 @@ Moderately informative priors $\sigma_{\beta} =2.5*sd(Y)/sd(X))$ are used for co
 getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
-                WFPBB=FALSE,
+                bootstrap=FALSE,
                 L=5){
   
   # TRAINING DATA ----
@@ -297,7 +297,7 @@ poststrat_SxJ <- function(beta, Xp, g, w = NULL, J = max(g)) {
 getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
-                WFPBB=FALSE,
+                bootstrap=FALSE,
                 L=5
                 ){
 .....
@@ -335,7 +335,7 @@ getMRP=function(MR=nps,
   return(list(
     puma_summary_mrpr=puma_summary_mrpr,
     puma_summary_mrpp=puma_summary_mrpp,
-    puma_summary_mrpr_WFPBB=puma_summary_mrpr_WFPBB,
+    puma_summary_mrpr_bootstrap=puma_summary_mrpr_bootstrap,
     rhat=sum_tbl$rhat
   ))
   
@@ -370,20 +370,21 @@ tryCatch(
       MR = nps_df,
       ps = ps_df,
       acs_pop = acs_pop,
-      WFPBB=F,
-      L=5
+      bootstrap=TRUE,
+      L=100
     )
     
     mrp_time <- Sys.time() - start_time
     cat("✅ getMRP completed in", round(mrp_time, 2), attr(mrp_time, "units"), "\n")
     
-    # Post Stratification results (MRP-R & MRP-P)
+    # Post Stratification results (MRP-R, MRP-P & MRP-R-bootstrap)
     rhat<-mrp$rhat
     mrpra <- mrp$puma_summary_mrpr
     mrppb <- mrp$puma_summary_mrpp
-    # mrppc <- mrp$puma_summary_mrpr_WFPBB
+    mrppc <- mrp$puma_summary_mrpr_bootstrap
     cat("- MRP-R results:", nrow(mrpra), "PUMAs\n")
     cat("- MRP-P results:", nrow(mrppb), "PUMAs\n")
+    cat("- MRP-R-bootstrap results:", nrow(mrppc), "PUMAs\n")
   },
   error = function(e) {
     cat("❌ getMRP failed:", e$message, "\n")

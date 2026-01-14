@@ -102,7 +102,7 @@ make_summary <- function(draw_mat, puma_names, tag) {
 getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
-                WFPBB=FALSE,
+                bootstrap=FALSE,
                 L=5,
                 threads=4){
 
@@ -204,14 +204,14 @@ getMRP=function(MR=nps,
 
   puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-r")
   puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
-  
-  
-  if(WFPBB){
+
+
+  if(bootstrap){
     # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
     S <- nrow(beta)
     mu_boot_array <- array(NA_real_, dim = c(S, J, L))
 
-    cat("\nGenerating", L, "bootstrap samples for WFPBB...\n")
+    cat("\nGenerating", L, "bootstrap samples...\n")
     system.time({
       for (l in 1:L) {
         # Generate bootstrap sample l using simple weighted bootstrap
@@ -245,18 +245,18 @@ getMRP=function(MR=nps,
 
     # Flatten S × J × L into (S*L) × J to capture both uncertainties
     mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
-    puma_summary_mrpr_WFPBB <- make_summary(mu_combined,  PUMA_lev, "mrp-r-WFPBB")
-    
-    
+    puma_summary_mrpr_bootstrap <- make_summary(mu_combined,  PUMA_lev, "mrp-r-bootstrap")
+
+
   }else{
-    puma_summary_mrpr_WFPBB=NULL
+    puma_summary_mrpr_bootstrap=NULL
   }
   
   
   return(list(
     puma_summary_mrpr=puma_summary_mrpr,
     puma_summary_mrpp=puma_summary_mrpp,
-    puma_summary_mrpr_WFPBB=puma_summary_mrpr_WFPBB,
+    puma_summary_mrpr_bootstrap=puma_summary_mrpr_bootstrap,
     rhat=sum_tbl$rhat
   ))
   
@@ -373,6 +373,8 @@ getMRP_INT <- function(MR,
                        acs_pop,
                        mod = mod,
                        adjust=TRUE,
+                       bootstrap=FALSE,
+                       L=5,
                        threads=4
 ) {
   
@@ -622,14 +624,78 @@ getMRP_INT <- function(MR,
   
   puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p-int")
   puma_summary_mrpr <- make_summary(mu_ps_draws, PUMA_lev, "mrp-r-int")
-  
+
+  if(bootstrap){
+    # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
+    S <- nrow(beta)
+    mu_boot_array <- array(NA_real_, dim = c(S, J, L))
+
+    cat("\nGenerating", L, "bootstrap samples for MRP-INT...\n")
+    system.time({
+      for (l in 1:L) {
+        # Generate bootstrap sample l using simple weighted bootstrap
+        boot_idx <- sample(
+          1:nrow(ps),
+          size = nrow(ps),
+          replace = TRUE,
+          prob = ps$weights
+        )
+
+        # Resample THIS bootstrap replicate
+        ps_boot <- ps[boot_idx, ]
+
+        # Compute psi for bootstrap sample
+        psi_ps_boot <- predict_psi(ps_boot)
+        psi_bin_ps_boot <- map_bins(psi_ps_boot$bin_val)
+
+        # Collapse THIS bootstrap sample to cells
+        ps_boot_cells <- collapse_to_cells_int(
+          df          = ps_boot,
+          train_ref   = nps_ca,
+          PUMA_lev    = PUMA_lev,
+          psi_vec     = psi_ps_boot$psi,
+          psi_bin_vec = psi_bin_ps_boot,
+          weight_col  = "weights",
+          bin_map     = bin_map,
+          map_bins    = function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+        )
+
+        # Poststratify THIS bootstrap sample
+        mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
+          poststrat_int_SxJ(
+            beta = beta,
+            beta_psi = beta_psi,
+            zeta = zeta,
+            a_puma = a_puma,
+            Xp = ps_boot_cells$Xp,
+            g = ps_boot_cells$g,
+            psi = ps_boot_cells$psi,
+            psi_bin = ps_boot_cells$psi_bin,
+            w = ps_boot_cells$w,
+            J = J
+          ) else
+            matrix(NA_real_, nrow = S, ncol = J)
+
+        if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
+      }
+    })
+
+    # Flatten S × J × L into (S*L) × J to capture both uncertainties
+    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
+    puma_summary_mrpr_bootstrap <- make_summary(mu_combined, PUMA_lev, "mrp-r-int-bootstrap")
+
+  }else{
+    puma_summary_mrpr_bootstrap=NULL
+  }
+
   list(
     fit          = fit,
     puma_summary_mrpp = puma_summary_mrpp,
     puma_summary_mrpr = puma_summary_mrpr,
+    puma_summary_mrpr_bootstrap = puma_summary_mrpr_bootstrap,
     psi_train     = psi_train,
     rhat         = sum_tbl$rhat,
-    adj_factor   = adj_factor   
+    adj_factor   = adj_factor
   )
 }
 
