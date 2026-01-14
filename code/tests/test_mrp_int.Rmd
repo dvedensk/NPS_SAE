@@ -521,17 +521,22 @@ tryCatch(
       ps = ps_df,
       acs_pop = acs_pop,
       mod = mod,
-      adjust=T
+      adjust=T,
+      bootstrap=TRUE,
+      L=100
       )
-    
+
     mrp_time <- Sys.time() - start_time
-    cat("✅ getMRP completed in", round(mrp_time, 2), attr(mrp_time, "units"), "\n")
-    
-    # Post Stratification results (MRP-R & MRP-P)
+    cat("✅ getMRP_INT completed in", round(mrp_time, 2), attr(mrp_time, "units"), "\n")
+
+    # Post Stratification results (MRP-R, MRP-P & MRP-R-bootstrap)
     rhat<-mrpint$rhat
     mrpra <- mrpint$puma_summary_mrpr
     mrppb <- mrpint$puma_summary_mrpp
-    cat("- MRP-int-R results:", nrow(mrpra), "PUMAs\n")
+    mrppc <- mrpint$puma_summary_mrpr_bootstrap
+    cat("- MRP-INT-R results:", nrow(mrpra), "PUMAs\n")
+    cat("- MRP-INT-P results:", nrow(mrppb), "PUMAs\n")
+    cat("- MRP-INT-R-bootstrap results:", nrow(mrppc), "PUMAs\n")
     cat("- MRP-int-P results:", nrow(mrppb), "PUMAs\n")
   },
   error = function(e) {
