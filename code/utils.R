@@ -1,3 +1,32 @@
+# Draw from MVN by specifying a covariance matrix
+rmvnorm = function(n, mean, covar)
+{
+  k <- length(mean)
+  stopifnot(k == nrow(covar) && k == ncol(covar))
+  Z <- matrix(rnorm(n*k), k, n)
+  A <- t(chol(covar))
+  out <- A %*% Z + mean
+
+  if(n==1){ return(as.vector(out)) } else { return(out) }
+}
+
+# Draw from MVN by specifying a precision matrix
+rmvnorm_prec = function(n, mean, prec)
+{
+  k <- length(mean)
+  stopifnot(k == nrow(prec) && k == ncol(prec))
+  Z <- matrix(rnorm(n*k), k, n)
+
+  # Note that Ainv %*% t(Ainv) is the Cholesky decomposition of the covariance
+  # matrix solve(Omega)
+  A <- chol(prec)
+  Ainv <- backsolve(A, diag(1,k,k))
+  out <- Ainv %*% Z + mean
+
+  if(n==1){ return(as.vector(out)) } else { return(out) }
+}
+
+
 int_score <- function(alpha, truth, L, U){
   return(
     (U - L) + 2/alpha*(truth < L)*(L - truth) + 2/alpha*(truth > U)*(truth - U)
@@ -8,20 +37,8 @@ int_score <- function(alpha, truth, L, U){
 # via a logistic model distinguishing prob vs. non‐prob cases
 
 estimate_ipw <- function(ps, nps, cov_formula, method) {
-  # FIXME: a one-liner is 
-  # stopifnot(method %in% c("ignorable", "beta_reg", "weighted"))
-  if(! (method %in% c("ignorable", "beta_reg", "weighted"))) {
-    stop()
-  }
+  stopifnot(method %in% c("ignorable", "beta_reg", "weighted"))
 
-  ######
-  # FIXME: moving these lines closer to the "# Normalize" comment 
-  # would enhance readability.
-  n_ps <- nrow(ps)
-  n_nps <- nrow(nps)
-  C_s <- n_ps/(n_nps + n_ps)
-  C_s_star <- n_nps/(n_nps + n_ps)
-  ######
   ps_weights <- ps$PWGTP #Need to double check whether scaling matters here
       
   if(method == "beta_reg") {
@@ -54,17 +71,14 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
   nps_weights <- 1/nps_prob_pred
 
   # Normalize 
+  n_ps <- nrow(ps)
+  n_nps <- nrow(nps)
+  C_s <- n_ps/(n_nps + n_ps)
+  C_s_star <- n_nps/(n_nps + n_ps)
+
   nps_weights <- nps_weights * (C_s_star * sum(nps_weights)/sum(ps_weights))
   ps_weights <- ps_weights * C_s
 
-  # return(list(nps_ipw = nps_ipw,
-  #             ps_ipw = ps_ipw))
-  # FIXME: ^ variable names don't match. I assume you meant
   return(list(nps_ipw = nps_weights,
               ps_ipw = ps_weights))
 }
-
-
-    
-# FIXME: remove this
-#brm_out <- brm(1/PWGTP ~ AGEP + RAC1P + SEX, data=ps, family=Beta())
