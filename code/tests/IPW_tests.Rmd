@@ -35,14 +35,7 @@ n_burn <- 500
 ```
 
 ```{r regenerate-samples, include=FALSE, cache=TRUE}
-# FIXME: setwd seems unnecessary here; wd should always be project root
-# Regenerate test samples with current weights
-# Set working directory to project root temporarily
-old_wd <- getwd()
-setwd(here::here())
-# source("/home/d/Desktop/Mizzou/Research/MSS_NPS/code/tests/create_test_sample.R")
 source(here::here("code", "tests", "create_test_sample.R"))
-setwd(old_wd)
 
 # Load the generated samples
 load(here::here("data", "test_sample.RData"), verbose = TRUE)
@@ -66,7 +59,7 @@ ps_scale_weights <- nrow(ps_df) * ps_df$weights / sum(ps_df$weights)
 
 cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
 cat("Weights add up to:", sum(ps_df$weights), "\n")
-cat("Population N: ", nrow(acs_pop))
+cat("Population N: ", nrow(acs_pop), "\n")
 ``` 
 
 Set covariates and random effect variables
@@ -84,12 +77,6 @@ data.frame(
   PUBCOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
 ) %>%
     mutate(PUBCOV_Rate = round(PUBCOV_Rate, 3))
-
-# FIXME: remove this
-#calculate_sample_diagnostics(pop_df=acs_pop,
-#                             ps_sample=ps_df,
-#                             nps_sample=nps_df,
-#                             response_var="HICOV")
 ```
 
 # Model Specification
@@ -218,7 +205,7 @@ HT <- function(df, model_name) {
 
   # Calculate direct estimates by PUMA with standard errors
   direst <- survey::svyby(
-    as.formula(paste0("~", response_var)),
+    as.formula(paste0("~", "PUBCOV")), #response value hard-coded
     ~PUMA,
     samp.design,
     svymean,
