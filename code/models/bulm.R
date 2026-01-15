@@ -1,6 +1,5 @@
 library(BayesLogit)
 library(Matrix)
-library(LaplacesDemon)
 
 # This function fits a survey-weighted, binary unit-level model via Gibbs sampling
 # X is the input covariate matrix, one row per sample unit
@@ -28,31 +27,25 @@ fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=N
   if(display_progress) { pb <- txtProgressBar(min=0, max=iter, style=3) }
   for(i in 1:iter){
 
-    # FIXME: using the precision -> chol -> backsolve would be faster
-    # also qr.solve to calculate the mean
-    # also crossprod(X * sqrt(w)) may be faster than t(X) %*% Diagonal(length(w), w) %*% X 
-    # also prec_beta and prec_eta are really covariance matrices due to the solve calls
-
     ## Sample fixed effects
-    prec_beta <- solve(t(X) %*% Diagonal(length(w), w) %*% X + b_inv)
+    prec_beta <- crossprod(X * sqrt(w)) + b_inv
     mean_beta <- t(X) %*% Diagonal(length(w), w) %*% (kappa/w - Psi %*% eta )
-    beta <- beta_out[i, ]  <- as.numeric(mvtnorm::rmvnorm(1, 
-						mean=prec_beta %*% mean_beta, 
-						sigma=as.matrix(prec_beta)))
+    beta <- beta_out[i, ]  <- rmvnorm_prec(n=1, 
+					   mean=qr.solve(prec_beta, mean_beta),
+					   prec=prec_beta)
     
     ## Sample random effects with sum-to-zero constraint
-    Einv <- (1/sigma2_eta) * Diagonal(r)
-    prec_eta <- solve(t(Psi) %*% Diagonal(length(w), w) %*% Psi + Einv)
+    prec_eta <- crossprod(Psi * sqrt(w)) + Diagonal(r)/sigma2_eta
     mean_eta <- t(Psi) %*% Diagonal(length(w),w) %*% (kappa/w - X %*% beta )
-    eT <- as.numeric(mvtnorm::rmvnorm(1, 
-			     mean=prec_eta %*% mean_eta, 
-			     sigma=as.matrix(prec_eta)))
+    eT <- rmvnorm_prec(n=1, 
+	   	       mean=qr.solve(prec_eta, mean_eta),
+		       prec=prec_eta)
     eta <- eta_out[i,]  <- eT - mean(eT)
     
     ## Sample RE variance
     sigma2_eta <- sigma2_eta_out[i] <- 1/rgamma(1,
-                                     shape=0.5 + r/2,
-                                     (0.5 + 0.5 * t(eta) %*% eta))
+                                                shape=0.5 + r/2,
+                                                (0.5 + 0.5 * t(eta) %*% eta))
     
     ## Sample latent PG variables
     w <- rpg(n, weights, as.numeric(X%*%beta + Psi%*%eta))
@@ -84,10 +77,10 @@ post_preds <- function(grouped_pop_df, beta, eta, alpha, X_formula, Psi_formula)
 
 # FIXME: summaries_only is unused
 bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=1000,
-                         X_formula, Psi_formula, iter=1000, burn=500,
-                         weights=NULL, summaries_only=TRUE) {
+                         X_formula, Psi_formula, iter=1000, burn=500, weights=NULL) {
+    
   coeffs <- fit_bulm(X, Psi, y, sigma2_beta, iter, burn, weights)
-    return(list(summaries = post_preds(grouped_pop_df, coeffs$beta, coeffs$eta,
-                                      alpha, X_formula, Psi_formula),
-                chains=coeffs))
+  return(list(summaries = post_preds(grouped_pop_df, coeffs$beta, coeffs$eta,
+                                     alpha, X_formula, Psi_formula),
+              chains=coeffs))
 }
