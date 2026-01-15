@@ -99,13 +99,8 @@ make_summary <- function(draw_mat, puma_names, tag) {
 
 # ---------- 5) getMRP----------
 #
-# IMPORTANT: Bootstrap parameter
-# - bootstrap=TRUE (recommended): Captures both posterior uncertainty from the Bayesian
-#   model AND sampling uncertainty from the probability sample. This is essential for
-#   achieving proper coverage (~95% instead of ~52%) for MRP-R estimates.
-# - bootstrap=FALSE: Only captures posterior uncertainty, resulting in underestimated
-#   uncertainty and poor coverage.
-# - L: Number of bootstrap replicates (recommended: 100 for production, 10-20 for testing)
+# Bootstrap: Use bootstrap=TRUE for proper coverage (~95% vs ~52%). Captures both
+# posterior and sampling uncertainty. L=100 recommended.
 #
 getMRP=function(MR=nps,
                 ps=ps,
@@ -391,13 +386,8 @@ poststrat_int_SxJ <- function(beta, beta_psi, zeta, a_puma,
 
 # ---------- 4) getMRP_INT----------
 #
-# IMPORTANT: Bootstrap parameter
-# - bootstrap=TRUE (recommended): Captures both posterior uncertainty from the Bayesian
-#   model AND sampling uncertainty from the probability sample. This is essential for
-#   achieving proper coverage (~95% instead of ~52%) for MRP-INT-R estimates.
-# - bootstrap=FALSE: Only captures posterior uncertainty, resulting in underestimated
-#   uncertainty and poor coverage.
-# - L: Number of bootstrap replicates (recommended: 100 for production, 10-20 for testing)
+# Bootstrap: Use bootstrap=TRUE for proper coverage (~95% vs ~52%). Captures both
+# posterior and sampling uncertainty. L=100 recommended.
 #
 getMRP_INT <- function(MR,
                        ps,
