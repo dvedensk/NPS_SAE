@@ -543,7 +543,6 @@ tryCatch(
     cat("- MRP-INT-R results:", nrow(mrpra), "PUMAs\n")
     cat("- MRP-INT-P results:", nrow(mrppb), "PUMAs\n")
     cat("- MRP-INT-R-bootstrap results:", nrow(mrppc), "PUMAs\n")
-    cat("- MRP-int-P results:", nrow(mrppb), "PUMAs\n")
   },
   error = function(e) {
     cat("❌ getMRP failed:", e$message, "\n")
