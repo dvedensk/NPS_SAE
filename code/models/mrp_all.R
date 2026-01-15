@@ -254,6 +254,10 @@ getMRP=function(MR=nps,
     })
 
     # Flatten S × J × L into (S*L) × J to capture both uncertainties
+    # aperm(mu_boot_array, c(3, 1, 2)) reorders dimensions from (S, J, L) to (L, S, J)
+    # matrix(..., nrow = S*L, ncol = J) then stacks all L bootstrap replicates vertically,
+    # so make_summary() treats all (S*L) rows identically when computing quantiles across
+    # both posterior draws (S) and bootstrap replicates (L)
     mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
     puma_summary_mrpr_bootstrap <- make_summary(mu_combined,  PUMA_lev, "mrp-r-bootstrap")
 
@@ -377,7 +381,16 @@ poststrat_int_SxJ <- function(beta, beta_psi, zeta, a_puma,
 
 
 
-# ---------- 4) getMRP_INT---------- 
+# ---------- 4) getMRP_INT----------
+#
+# IMPORTANT: Bootstrap parameter
+# - bootstrap=TRUE (recommended): Captures both posterior uncertainty from the Bayesian
+#   model AND sampling uncertainty from the probability sample. This is essential for
+#   achieving proper coverage (~95% instead of ~52%) for MRP-INT-R estimates.
+# - bootstrap=FALSE: Only captures posterior uncertainty, resulting in underestimated
+#   uncertainty and poor coverage.
+# - L: Number of bootstrap replicates (recommended: 100 for production, 10-20 for testing)
+#
 getMRP_INT <- function(MR,
                        ps,
                        acs_pop,
@@ -696,6 +709,10 @@ getMRP_INT <- function(MR,
     })
 
     # Flatten S × J × L into (S*L) × J to capture both uncertainties
+    # aperm(mu_boot_array, c(3, 1, 2)) reorders dimensions from (S, J, L) to (L, S, J)
+    # matrix(..., nrow = S*L, ncol = J) then stacks all L bootstrap replicates vertically,
+    # so make_summary() treats all (S*L) rows identically when computing quantiles across
+    # both posterior draws (S) and bootstrap replicates (L)
     mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
     puma_summary_mrpr_bootstrap <- make_summary(mu_combined, PUMA_lev, "mrp-r-int-bootstrap")
 
