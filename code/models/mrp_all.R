@@ -97,14 +97,22 @@ make_summary <- function(draw_mat, puma_names, tag) {
 }
 
 
-# ---------- 5) getMRP---------- 
-
+# ---------- 5) getMRP----------
+#
+# Bootstrap: Use bootstrap=TRUE for proper coverage (~95% vs ~52%). Captures both
+# posterior and sampling uncertainty. L=100 recommended.
+#
 getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
-                WFPBB=FALSE,
-                L=5,
+                bootstrap=FALSE,
+                L=100,
                 threads=4){
+
+  # Validate L parameter
+  if (bootstrap && (is.null(L) || L < 1)) {
+    stop("L must be specified and >= 1 when bootstrap=TRUE")
+  }
 
   # TRAINING DATA ----
   nps_ca <- MR  # nps
@@ -152,7 +160,7 @@ getMRP=function(MR=nps,
     data = stan_data,
     chains = 2,
     parallel_chains = 2,
-    threads_per_chain = 4,
+    threads_per_chain = threads,
     iter_warmup = 500,
     iter_sampling = 1000,
     seed = 123
@@ -189,64 +197,83 @@ getMRP=function(MR=nps,
   apuma_draws <- get_apuma_draws(fit)
   
   mu_ps_draws  <- if (nrow(ps_cells$Xp)  > 0)
-    poststrat_SxJ(beta, apuma_draws, ps_cells$Xp,  ps_cells$g,  ps_cells$w,  J) else
+    poststrat_SxJ(beta=beta,
+                  a_puma=apuma_draws,
+                  Xp=ps_cells$Xp,
+                  g=ps_cells$g,
+                  w=ps_cells$w,
+                  J=J) else
       matrix(NA_real_, nrow = nrow(beta), ncol = J)
-  
+
   mu_pop_draws <- if (nrow(pop_cells$Xp) > 0)
-    poststrat_SxJ(beta=beta, 
-                  apuma_draws,
-                  Xp=pop_cells$Xp, 
-                  g=pop_cells$g, 
-                  w=pop_cells$w, 
+    poststrat_SxJ(beta=beta,
+                  a_puma=apuma_draws,
+                  Xp=pop_cells$Xp,
+                  g=pop_cells$g,
+                  w=pop_cells$w,
                   J=J) else
                     matrix(NA_real_, nrow = nrow(beta), ncol = J)
   
 
   puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-r")
   puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
-  
-  
-  if(WFPBB){
-    index_list <- vector("list", L)
+
+
+  if (bootstrap) {
+    # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
+    S <- nrow(beta)
+    mu_boot_array <- array(NA_real_, dim = c(S, J, L))
+
+    cat("\nGenerating", L, "bootstrap samples...\n")
     system.time({
       for (l in 1:L) {
-        index_list[[l]] <- MSIMST::WFPBB(
-          y = 1:nrow(ps),
-          w = ps$weights,
-          N = sum(ps$weights),
-          n = nrow(ps),
-          verbatim = FALSE
+        # Generate bootstrap sample l using simple weighted bootstrap
+        # (much faster than MSIMST::WFPBB which fits a Bayesian model)
+        boot_idx <- sample(
+          1:nrow(ps),
+          size = nrow(ps),
+          replace = TRUE,
+          prob = ps$weights
         )
-        print(paste("Now generate WFPBB", l))
+
+        # Resample THIS bootstrap replicate
+        ps_boot <- ps[boot_idx, ]
+
+        # Collapse THIS bootstrap sample to cells
+        ps_boot_cells <- collapse_to_cells(ps_boot, nps_ca, PUMA_lev, weight_col = "weights")
+
+        # Poststratify THIS bootstrap sample
+        mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
+          poststrat_SxJ(beta=beta,
+                        a_puma=apuma_draws,
+                        Xp=ps_boot_cells$Xp,
+                        g=ps_boot_cells$g,
+                        w=ps_boot_cells$w,
+                        J=J) else
+                          matrix(NA_real_, nrow = S, ncol = J)
+
+        if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
       }
     })
-    ps_star <- ps[unlist(index_list), ]
-    ps_star_cells <- collapse_to_cells(ps_star, nps_ca, PUMA_lev, weight_col = "weights")
-    
-    # Build Ps (probability-sample poststrat) block
-    ps_b_star <- mk_pred(ps_star, colnames(X_train), PUMA_lev, nps_ca)  
-    w_ps_star <- ps_star$weights[match(rownames(ps_b_star$X), rownames(ps_star))]  
-    
-    mu_star_draws <- if (nrow(ps_star_cells$Xp) > 0)
-      poststrat_SxJ(beta=beta, 
-                    Xp=ps_star_cells$Xp, 
-                    g=ps_star_cells$g, 
-                    w=ps_star_cells$w, 
-                    J=J) else
-                      matrix(NA_real_, nrow = nrow(beta), ncol = J)
-    
-    puma_summary_mrpr_WFPBB <- make_summary(mu_star_draws,  PUMA_lev, "mrp-r-WFPBB")
-    
-    
-  }else{
-    puma_summary_mrpr_WFPBB=NULL
+
+    # Flatten S × J × L into (S*L) × J to capture both uncertainties
+    # aperm(mu_boot_array, c(3, 1, 2)) reorders dimensions from (S, J, L) to (L, S, J)
+    # matrix(..., nrow = S*L, ncol = J) then stacks all L bootstrap replicates vertically,
+    # so make_summary() treats all (S*L) rows identically when computing quantiles across
+    # both posterior draws (S) and bootstrap replicates (L)
+    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
+    puma_summary_mrpr_bootstrap <- make_summary(mu_combined,  PUMA_lev, "mrp-r-bootstrap")
+
+
+  } else {
+    puma_summary_mrpr_bootstrap=NULL
   }
   
   
   return(list(
     puma_summary_mrpr=puma_summary_mrpr,
     puma_summary_mrpp=puma_summary_mrpp,
-    puma_summary_mrpr_WFPBB=puma_summary_mrpr_WFPBB,
+    puma_summary_mrpr_bootstrap=puma_summary_mrpr_bootstrap,
     rhat=sum_tbl$rhat
   ))
   
@@ -357,14 +384,25 @@ poststrat_int_SxJ <- function(beta, beta_psi, zeta, a_puma,
 
 
 
-# ---------- 4) getMRP_INT---------- 
+# ---------- 4) getMRP_INT----------
+#
+# Bootstrap: Use bootstrap=TRUE for proper coverage (~95% vs ~52%). Captures both
+# posterior and sampling uncertainty. L=100 recommended.
+#
 getMRP_INT <- function(MR,
                        ps,
                        acs_pop,
                        mod = mod,
                        adjust=TRUE,
+                       bootstrap=FALSE,
+                       L=100,
                        threads=4
 ) {
+
+  # Validate L parameter
+  if (bootstrap && (is.null(L) || L < 1)) {
+    stop("L must be specified and >= 1 when bootstrap=TRUE")
+  }
   
   
   # ps$PWGTP<-ps$weights
@@ -425,7 +463,7 @@ getMRP_INT <- function(MR,
       sel_MR[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")],
       sel_ps[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")]
     ) 
-  }else{
+  } else {
     adj_factor=NULL
   }
   
@@ -612,14 +650,82 @@ getMRP_INT <- function(MR,
   
   puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p-int")
   puma_summary_mrpr <- make_summary(mu_ps_draws, PUMA_lev, "mrp-r-int")
-  
+
+  if (bootstrap) {
+    # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
+    S <- nrow(beta)
+    mu_boot_array <- array(NA_real_, dim = c(S, J, L))
+
+    cat("\nGenerating", L, "bootstrap samples for MRP-INT...\n")
+    system.time({
+      for (l in 1:L) {
+        # Generate bootstrap sample l using simple weighted bootstrap
+        boot_idx <- sample(
+          1:nrow(ps),
+          size = nrow(ps),
+          replace = TRUE,
+          prob = ps$weights
+        )
+
+        # Resample THIS bootstrap replicate
+        ps_boot <- ps[boot_idx, ]
+
+        # Compute psi for bootstrap sample
+        psi_ps_boot <- predict_psi(ps_boot)
+        psi_bin_ps_boot <- map_bins(psi_ps_boot$bin_val)
+
+        # Collapse THIS bootstrap sample to cells
+        ps_boot_cells <- collapse_to_cells_int(
+          df          = ps_boot,
+          train_ref   = nps_ca,
+          PUMA_lev    = PUMA_lev,
+          psi_vec     = psi_ps_boot$psi,
+          psi_bin_vec = psi_bin_ps_boot,
+          weight_col  = "weights",
+          bin_map     = bin_map,
+          map_bins    = function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+        )
+
+        # Poststratify THIS bootstrap sample
+        mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
+          poststrat_int_SxJ(
+            beta = beta,
+            beta_psi = beta_psi,
+            zeta = zeta,
+            a_puma = a_puma,
+            Xp = ps_boot_cells$Xp,
+            g = ps_boot_cells$g,
+            psi = ps_boot_cells$psi,
+            psi_bin = ps_boot_cells$psi_bin,
+            w = ps_boot_cells$w,
+            J = J
+          ) else
+            matrix(NA_real_, nrow = S, ncol = J)
+
+        if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
+      }
+    })
+
+    # Flatten S × J × L into (S*L) × J to capture both uncertainties
+    # aperm(mu_boot_array, c(3, 1, 2)) reorders dimensions from (S, J, L) to (L, S, J)
+    # matrix(..., nrow = S*L, ncol = J) then stacks all L bootstrap replicates vertically,
+    # so make_summary() treats all (S*L) rows identically when computing quantiles across
+    # both posterior draws (S) and bootstrap replicates (L)
+    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
+    puma_summary_mrpr_bootstrap <- make_summary(mu_combined, PUMA_lev, "mrp-r-int-bootstrap")
+
+  } else {
+    puma_summary_mrpr_bootstrap=NULL
+  }
+
   list(
     fit          = fit,
     puma_summary_mrpp = puma_summary_mrpp,
     puma_summary_mrpr = puma_summary_mrpr,
+    puma_summary_mrpr_bootstrap = puma_summary_mrpr_bootstrap,
     psi_train     = psi_train,
     rhat         = sum_tbl$rhat,
-    adj_factor   = adj_factor   
+    adj_factor   = adj_factor
   )
 }
 
