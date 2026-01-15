@@ -242,7 +242,7 @@ getMRP=function(MR=nps,
         # Poststratify THIS bootstrap sample
         mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
           poststrat_SxJ(beta=beta,
-                        apuma_draws,
+                        a_puma=apuma_draws,
                         Xp=ps_boot_cells$Xp,
                         g=ps_boot_cells$g,
                         w=ps_boot_cells$w,
