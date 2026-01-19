@@ -9,7 +9,8 @@ library(Matrix)
 # iter is the number of iterations
 # burn is the length of burn in
 # weights is the vector of survey weights
-fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=NULL, display_progress=FALSE){
+fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500,
+                     weights=NULL, display_progress=FALSE){
   p <- ncol(X)
   r <- ncol(Psi)
   n <- length(y)
@@ -56,7 +57,12 @@ fit_bulm <- function(X, Psi, y, sigma2_beta=1000, iter=1000, burn=500, weights=N
               sigma2_eta=sigma2_eta_out[-c(1:burn)]))
 }
 
-post_preds <- function(grouped_pop_df, beta, eta, alpha, X_formula, Psi_formula) {
+post_preds <- function(grouped_pop_df, beta, eta, alpha, X_formula, Psi_formula, stan=FALSE) {
+  if(stan) {
+    beta <- posterior::as_draws_matrix(beta)
+    eta <- posterior::as_draws_matrix(eta)
+  }
+
   X_pop <- model.matrix(X_formula , data=grouped_pop_df)
   Psi_pop <- model.matrix(Psi_formula, data=grouped_pop_df)
   pop_size <- nrow(grouped_pop_df)
@@ -75,12 +81,37 @@ post_preds <- function(grouped_pop_df, beta, eta, alpha, X_formula, Psi_formula)
   return(summary_df)
 }
 
-# FIXME: summaries_only is unused
-bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=1000,
-                         X_formula, Psi_formula, iter=1000, burn=500, weights=NULL) {
+generate_bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=1000,
+                                  X_formula, Psi_formula, iter=1000, burn=500, weights=NULL,
+                                  display_progress=FALSE) {
     
-  coeffs <- fit_bulm(X, Psi, y, sigma2_beta, iter, burn, weights)
+  coeffs <- fit_bulm(X, Psi, y, sigma2_beta, iter, burn,
+                     weights, display_progress=display_progress)
   return(list(summaries = post_preds(grouped_pop_df, coeffs$beta, coeffs$eta,
                                      alpha, X_formula, Psi_formula),
               chains=coeffs))
+}
+
+get_stan_summaries <- function(y, X, Psi, weights, sigma2_beta=3, n_chains,
+                               mcmc_burn, mcmc_iter, grouped_pop_df, alpha,
+                               X_formula, Psi_formula, threads_per_chain=4) {
+    
+  bulm_stan_dat <- list(r=ncol(Psi), nn=length(y), p=ncol(X),
+                        Y=y, weights=weights,
+                        puma=apply(Psi, 1, which.max),
+                        X=X, sigma2_beta=3)
+
+  bulm_stan_out <- stan_bulm_mod$sample(data=bulm_stan_dat, chains=n_chains,
+                                        parallel_chains=n_chains, iter_warmup=mcmc_burn, 
+                                        iter_sampling=mcmc_iter, threads_per_chain=threads_per_chain)
+   
+  bulm_stan_pp <- post_preds(grouped_pop_df=acs_pop_grouped,
+                             beta=bulm_stan_out$draws("beta"),
+                             eta=bulm_stan_out$draws("eta"),
+                             alpha=alpha,
+                             X_formula=X_formula,
+                             Psi_formula=Psi_formula,
+                             stan=TRUE)
+
+  return(bulm_stan_pp)
 }
