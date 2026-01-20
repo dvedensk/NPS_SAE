@@ -100,3 +100,78 @@ predict.npsPost <- function(object, newdata, typeIerror = NULL) {
     class(nps_list) <- "npsPost"
     return(nps_list)
 }
+#' Calculate Adaptive Power Prior Exponent for Logistic Regression
+#'
+#' Uses Hotelling's T^2 test to determine the power prior exponent `a`
+#' based on the agreement between PS and NPS coefficient estimates.
+#' Following Salvatore et al. (2024) approach.
+#'
+#' @param y_ps Binary outcome vector from probability sample
+#' @param X_ps Design matrix from probability sample (without intercept)
+#' @param y_nps Binary outcome vector from nonprobability sample
+#' @param X_nps Design matrix from nonprobability sample (without intercept)
+#' @param verbose If TRUE, prints diagnostic information
+#'
+#' @return A list with:
+#'   - a: The adaptive power prior exponent (p-value from Hotelling test)
+#'   - t2: Hotelling's T^2 statistic
+#'   - f_stat: F-statistic
+#'   - p_value: p-value (same as `a`)
+#'   - beta_ps: PS coefficient estimates
+#'   - beta_nps: NPS coefficient estimates
+#'   - diff: Difference between PS and NPS coefficients
+#'
+#' @details
+#' Lower `a` values indicate greater disagreement between PS and NPS,
+#' suggesting NPS should receive less weight. Higher values indicate
+#' good agreement and allow more NPS influence.
+calculate_adaptive_power_prior_a <- function(y_ps, X_ps, y_nps, X_nps, verbose = TRUE) {
+
+  # Fit GLMs to get MLEs
+  glm_ps <- glm(y_ps ~ X_ps - 1, family = binomial())
+  glm_nps <- glm(y_nps ~ X_nps - 1, family = binomial())
+
+  beta_ps_hat <- coef(glm_ps)
+  beta_nps_hat <- coef(glm_nps)
+  diff_vec <- beta_ps_hat - beta_nps_hat
+
+  # Hotelling T^2 test
+  n_ps <- length(y_ps)
+  p_coef <- ncol(X_ps)
+  cov_beta_ps <- vcov(glm_ps)
+
+  # T^2 statistic
+  t2 <- as.numeric(t(diff_vec) %*% solve(cov_beta_ps) %*% diff_vec)
+
+  # Convert to F-statistic
+  f_scaling <- p_coef * (n_ps - 1) / (n_ps - p_coef)
+  f_stat <- t2 / f_scaling
+
+  # p-value becomes the power prior exponent
+  adaptive_a <- pf(f_stat, p_coef, n_ps - p_coef, lower.tail = FALSE)
+
+  if (verbose) {
+    cat(
+      "\nAdaptive Power Prior Exponent Calculation:",
+      "\n- Hotelling T^2:", round(t2, 4),
+      "\n- F-statistic:", round(f_stat, 4),
+      "\n- p-value:", round(adaptive_a, 4),
+      "\n- Adaptive a:", round(adaptive_a, 4),
+      "\n\nInterpretation:",
+      "\n- a ≈ 1.0: Strong PS-NPS agreement → NPS gets high weight",
+      "\n- a ≈ 0.5: Moderate agreement → NPS gets moderate weight",
+      "\n- a ≈ 0.0: Poor agreement → NPS gets low weight (high bias suspected)",
+      "\n\n"
+    )
+  }
+
+  return(list(
+    a = adaptive_a,
+    t2 = t2,
+    f_stat = f_stat,
+    p_value = adaptive_a,
+    beta_ps = beta_ps_hat,
+    beta_nps = beta_nps_hat,
+    diff = diff_vec
+  ))
+}
