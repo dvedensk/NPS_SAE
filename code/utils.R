@@ -95,7 +95,12 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
 # @param response_var Name of response variable
 # @param alpha Significance level for confidence intervals
 # @return Data frame with PUMA-level estimates: PUMA, point_est, lower_CI, upper_CI, model
-HT <- function(df, model_name, response_var, alpha) {
+HT <- function(df, model_name, response_var = NULL, alpha = 0.05) {
+  # If response_var not provided, try to get from parent environment
+  if (is.null(response_var)) {
+    response_var <- get("response_var", envir = parent.frame())
+  }
+
   samp.design <- survey::svydesign(ids = ~1, weights = ~weights, data = df)
 
   # Calculate direct estimates by PUMA with standard errors
