@@ -1,3 +1,32 @@
+# Draw from MVN by specifying a covariance matrix
+rmvnorm = function(n, mean, covar)
+{
+  k <- length(mean)
+  stopifnot(k == nrow(covar) && k == ncol(covar))
+  Z <- matrix(rnorm(n*k), k, n)
+  A <- t(chol(covar))
+  out <- A %*% Z + mean
+
+  if(n==1){ return(as.vector(out)) } else { return(out) }
+}
+
+# Draw from MVN by specifying a precision matrix
+rmvnorm_prec = function(n, mean, prec)
+{
+  k <- length(mean)
+  stopifnot(k == nrow(prec) && k == ncol(prec))
+  Z <- matrix(rnorm(n*k), k, n)
+
+  # Note that Ainv %*% t(Ainv) is the Cholesky decomposition of the covariance
+  # matrix solve(Omega)
+  A <- chol(prec)
+  Ainv <- backsolve(A, diag(1,k,k))
+  out <- Ainv %*% Z + mean
+
+  if(n==1){ return(as.vector(out)) } else { return(out) }
+}
+
+
 int_score <- function(alpha, truth, L, U){
   return(
     (U - L) + 2/alpha*(truth < L)*(L - truth) + 2/alpha*(truth > U)*(truth - U)
@@ -7,25 +36,86 @@ int_score <- function(alpha, truth, L, U){
 # Estimate pseudo‐inclusion weights for a non‐probability sample
 # via a logistic model distinguishing prob vs. non‐prob cases
 
-estimate_ipw <- function(ps, nps, cov_formula) {
-  # 1. Stack and label
-  combined <- bind_rows(
-    ps  %>% mutate(Z = 0),
-    nps %>% mutate(Z = 1)
-  )
-  
-  # 2. Fit propensity‐to‐be‐nonprob logistic regression
-  fit_prop <- glm(
-    formula = as.formula(paste0("Z ", deparse(cov_formula))),
-    family  = binomial(),
-    data    = combined
-  )
-  
-  # 3. Predict P(Z=1 | X) on nonprob units
-  p_hat  <- predict(fit_prop, newdata = nps, type = "response")
-  ipw_raw <- 1 / p_hat
-  
-  # 4. Normalize so sum(ipw) = nrow(nps) (keeps scale comparable to PS size)
-  ipw <- ipw_raw * (nrow(nps) / sum(ipw_raw))
-  return(ipw)
+estimate_ipw <- function(ps, nps, cov_formula, method) {
+  stopifnot(method %in% c("ignorable", "beta_reg", "weighted"))
+
+  ps_weights <- ps$PWGTP #Need to double check whether scaling matters here
+      
+  if(method == "beta_reg") {
+    filter_id <- which(ps_weights == 1)
+    ps$PWGTP[filter_id] <- 1.001
+    beta_reg_out <- betareg::betareg(formula=as.formula(paste("1/PWGTP",
+                                                     deparse(X_formula))),
+                            data=ps)
+    nps_prob_pred <- predict(beta_reg_out, newdata=nps)    
+  } else if(method == "weighted") {
+    combined <- bind_rows(
+      ps  %>% mutate(Z = 0),
+      nps %>% mutate(Z = 1)
+    )
+
+    combined <- combined %>%
+        mutate(PWGTP = ifelse(Z == 1, 1, PWGTP))         
+        
+    fit_prop <- glm(
+      formula = as.formula(paste0("Z ", deparse(cov_formula))),
+      weights = PWGTP, 
+      family  = binomial(),
+      data    = combined
+    )
+
+    nps_prob_pred  <- predict(fit_prop, newdata = nps, type = "response")
+  }
+
+  # NOTE: "ignorable" method is accepted but not implemented. Only "beta_reg" and
+  # "weighted" are currently used. If "ignorable" is called, nps_prob_pred will
+  # be undefined and will error on the next line.
+  nps_weights <- 1/nps_prob_pred
+
+  # Normalize 
+  n_ps <- nrow(ps)
+  n_nps <- nrow(nps)
+  C_s <- n_ps/(n_nps + n_ps)
+  C_s_star <- n_nps/(n_nps + n_ps)
+
+  nps_weights <- nps_weights * (C_s_star * sum(nps_weights)/sum(ps_weights))
+  ps_weights <- ps_weights * C_s
+
+  return(list(nps_ipw = nps_weights,
+              ps_ipw = ps_weights))
+}
+
+# Horvitz-Thompson (HT) Direct Estimator
+#
+# Calculates direct estimates by PUMA using survey-weighted Horvitz-Thompson estimator.
+# Used for IPW-based direct estimation where weights combine PS and NPS samples.
+#
+# @param df Data frame with columns: response variable, PUMA (area), weights
+# @param model_name String to label the model in output
+# @param response_var Name of response variable
+# @param alpha Significance level for confidence intervals
+# @return Data frame with PUMA-level estimates: PUMA, point_est, lower_CI, upper_CI, model
+HT <- function(df, model_name, response_var, alpha) {
+  samp.design <- survey::svydesign(ids = ~1, weights = ~weights, data = df)
+
+  # Calculate direct estimates by PUMA with standard errors
+  direst <- survey::svyby(
+    as.formula(paste0("~", response_var)),
+    ~PUMA,
+    samp.design,
+    survey::svymean,
+    na.rm = TRUE,
+    vartype = "se",
+    keep.names = FALSE
+  ) %>%
+    dplyr::arrange(PUMA) %>%
+    dplyr::transmute(
+      PUMA,
+      point_est = .data[[response_var]],
+      lower_CI = point_est + qnorm(alpha / 2) * se,
+      upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+      model = model_name
+    )
+
+  return(direst)
 }
