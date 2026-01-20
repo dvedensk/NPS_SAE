@@ -41,6 +41,11 @@ stan_bulm_mod <- cmdstan_model(
   cpp_options = list(stan_threads = TRUE)
 )
 
+nps_prior_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_logistic.stan"),
+  cpp_options = list(stan_threads = TRUE)
+)
+
 Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
 
 
@@ -89,6 +94,7 @@ alpha <- .05
 mcmc_iter <- 1000
 mcmc_burn <- 1000
 n_chains <- 2
+power_prior_a <- 0.5  # Power prior exponent for NPS Prior method (0-1)
 N_pop <- nrow(acs_pop)
 pop_mean <- mean(acs_pop[[response_var]], na.rm = TRUE)
 cat(
@@ -148,7 +154,9 @@ for (sim in 1:Nsim) {
   Psi_nps <- model.matrix(Psi_formula, data = nps)
   y_nps <- nps[[response_var]]
 
-  # 5. Direct estimate on probability sample
+  # ============================================================
+  # METHOD 1: DIRECT ESTIMATES (PS ONLY)
+  # ============================================================
   samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps)
 
   # svyby extraction: use built-in se to avoid manual column juggling
@@ -170,8 +178,9 @@ for (sim in 1:Nsim) {
       model = "direst"
     )
 
-
-  # 6. Fit unit-level model on probability sample (Stan-based BULM)
+  # ============================================================
+  # METHOD 2: STAN-BASED BULM (PS ONLY)
+  # ============================================================
   bulm_stan_dat <- list(
     r = ncol(Psi_ps),
     nn = length(y_ps),
@@ -203,14 +212,17 @@ for (sim in 1:Nsim) {
   )
   bulm_ps_out$model <- "bulm_ps_only"
 
-  # 7. IPW Methods
-  # 7.A Combine PS and NPS data matrices
+  # ============================================================
+  # METHOD 3: IPW METHODS
+  # ============================================================
+
+  # 3.1 Data Preparation (Combine PS + NPS)
   X <- rbind(X_ps, X_nps)
   Psi <- rbind(Psi_ps, Psi_nps)
   y <- c(y_ps, y_nps)
   PUMAs <- c(ps$PUMA, nps$PUMA)
 
-  # 7.B Estimate (two types of) IP weights for combined sample
+  # 3.2 IPW Weight Estimation (beta_reg & weighted methods)
   weights_beta <- estimate_ipw(ps, nps, X_formula, "beta_reg")
   weights_uncond <- estimate_ipw(ps, nps, X_formula, "weighted")
   weights_beta <- c(weights_beta$ps_ipw, weights_beta$nps_ipw)
@@ -218,7 +230,7 @@ for (sim in 1:Nsim) {
   scale_weights_beta <- weights_beta / sum(weights_beta) * length(y)
   scale_weights_uncond <- weights_uncond / sum(weights_uncond) * length(y)
 
-  # 7.C Calculate Horvitz-Thompson (HT) style direct estimates using IPW
+  # 3.3 HT Direct Estimates (Horvitz-Thompson with IPW)
   beta_df <- data.frame(PUBCOV = y, PUMA = PUMAs, weights = weights_beta)
   uncond_df <- data.frame(PUBCOV = y, PUMA = PUMAs, weights = weights_uncond)
   beta_HT <- HT(beta_df, "beta_HT")
@@ -227,7 +239,7 @@ for (sim in 1:Nsim) {
   beta_HT$model <- "IPW HT (beta)"
   uncond_HT$model <- "IPW HT (uncond)"
 
-  # 7.D Fit unit-level model with IPW weights
+  # 3.4 BULM with IPW Weights
   bulm_beta_out <- get_stan_summaries(
     y = y, X = X, Psi = Psi, weights = scale_weights_beta,
     n_chains = n_chains, mcmc_burn = mcmc_burn,
@@ -246,57 +258,124 @@ for (sim in 1:Nsim) {
   )
   bulm_uncond_out$model <- "bulm_uncond"
 
-  # 9. Combine results
+  # ============================================================
+  # METHOD 4: MRP VARIANTS
+  # ============================================================
 
-  # 8. Fit NPS-informed prior model (Ethan)
-
-  # 9. Fit MRP (Qianyu)
-
-
-
+  # 4.1 Basic MRP (MRP-R and MRP-P)
   mrp <- getMRP(
     MR = nps,
     ps = ps,
     acs_pop = acs_pop
   )
-  #  mrp_r
-  mrpr <- mrp$puma_summary_mrpr
+  mrpr <- mrp$puma_summary_mrpr  # MRP-R (PS poststratification)
+  mrpp <- mrp$puma_summary_mrpp  # MRP-P (Population poststratification)
 
-  #  mrp_p
-  mrpp <- mrp$puma_summary_mrpp
-
-
+  # 4.2 MRP with Integration (MRP-INT-R and MRP-INT-P)
   mrp1 <- getMRP_INT(
     MR = nps,
     ps = ps,
     acs_pop = acs_pop,
     mod = modINT,
-    adjust=T
+    adjust = TRUE
   )
+  mrpint_r <- mrp1$puma_summary_mrpr  # MRP-INT-R (PS poststratification)
+  mrpint_p <- mrp1$puma_summary_mrpp  # MRP-INT-P (Population poststratification)
 
-
-  #  mrp_int
-  mrpint <- mrp1$puma_summary_mrpp
-  mrpint <- mrp1$puma_summary_mrpr
-  
-
-
-
-  # 10. Fit VSW method (Qi)
+  # ============================================================
+  # METHOD 5: VSW METHOD
+  # ============================================================
   result_VSW <- vsw_out(ps[, !colnames(ps) %in% "weights"], nps, X_formula, response = response_var) 
   # This function returns a data frame with columns: "PUMA", "VSW_point_est", "ps_est", "nps_est", "pooled_results", "lower_CI", "upper_CI", "model"
   VSW_out <- result_VSW[,c("PUMA","VSW_point_est","lower_CI","upper_CI","model")]
   colnames(VSW_out) <- colnames(direst)
-  # 11. Combine results
 
+  # ============================================================
+  # METHOD 6: NPS PRIOR METHOD (POWER PRIOR)
+  # ============================================================
+  # Build fixed-effects design matrices (X only, no spatial random effects)
+  X_ps_fixed <- X_ps
+  X_nps_fixed <- X_nps
+
+  # Prepare Stan data
+  nps_prior_data <- list(
+    n = length(y_ps),
+    n_np = length(y_nps),
+    p = ncol(X_ps_fixed),
+    X = X_ps_fixed,
+    X_np = X_nps_fixed,
+    y = y_ps,
+    y_np = y_nps,
+    w = ps_scale_weights,
+    a = power_prior_a
+  )
+
+  # Sample from Stan model
+  nps_prior_fit <- nps_prior_mod$sample(
+    data = nps_prior_data,
+    chains = n_chains,
+    parallel_chains = n_chains,
+    iter_warmup = mcmc_burn,
+    iter_sampling = mcmc_iter,
+    threads_per_chain = 4,
+    refresh = 0  # Suppress progress messages
+  )
+
+  # Extract posterior draws of beta
+  beta_draws <- posterior::as_draws_matrix(nps_prior_fit$draws("beta"))
+
+  # Predict on population cells and aggregate by PUMA
+  X_pop <- model.matrix(X_formula, data = acs_pop_grouped)
+  n_cells <- nrow(X_pop)
+  n_draws <- nrow(beta_draws)
+
+  # Compute probabilities for each cell and draw
+  logits <- X_pop %*% t(beta_draws)
+  probs <- plogis(logits)
+
+  # Generate predictions (binomial draws for each cell)
+  preds <- matrix(
+    rbinom(n_cells * n_draws, size = acs_pop_grouped$n, prob = c(probs)),
+    nrow = n_cells, ncol = n_draws
+  )
+
+  # Aggregate by PUMA
+  puma_preds <- acs_pop_grouped %>%
+    select(PUMA, n) %>%
+    mutate(pred_matrix = asplit(preds, 1)) %>%
+    group_by(PUMA) %>%
+    summarize(
+      n_total = sum(n),
+      pred_sums = list(colSums(do.call(rbind, pred_matrix))),
+      .groups = "drop"
+    ) %>%
+    mutate(pred_probs = map(pred_sums, ~ .x / n_total)) %>%
+    mutate(
+      point_est = map_dbl(pred_probs, mean),
+      lower_CI = map_dbl(pred_probs, ~ quantile(.x, alpha / 2)),
+      upper_CI = map_dbl(pred_probs, ~ quantile(.x, 1 - alpha / 2))
+    ) %>%
+    select(PUMA, point_est, lower_CI, upper_CI) %>%
+    mutate(model = "NPS Prior (Power)")
+
+  nps_prior_out <- puma_preds
+
+  # ============================================================
+  # COMBINE ALL RESULTS
+  # ============================================================
   results[[sim]] <- rbind(
-    direst,
-    bulm_ps_out,
-    bulm_beta_out,
-    bulm_uncond_out,
-    VSW_out,
-    mrpr,
-    mrpp
+    direst,              # METHOD 1
+    bulm_ps_out,         # METHOD 2
+    beta_HT,             # METHOD 3.3
+    uncond_HT,           # METHOD 3.3
+    bulm_beta_out,       # METHOD 3.4
+    bulm_uncond_out,     # METHOD 3.4
+    mrpr,                # METHOD 4.1
+    mrpp,                # METHOD 4.1
+    mrpint_r,            # METHOD 4.2
+    mrpint_p,            # METHOD 4.2
+    VSW_out,             # METHOD 5
+    nps_prior_out        # METHOD 6
   )
 }
 
