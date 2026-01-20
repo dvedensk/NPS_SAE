@@ -1,10 +1,7 @@
-library(readr)
-library(dplyr)
-library(tidyverse)
+library(tidyverse)  # Loads readr, dplyr, purrr, ggplot2, etc.
 library(sampling)
 library(mvtnorm)
 library(survey)
-library(purrr)
 library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
@@ -20,6 +17,7 @@ tryCatch(
 
 source(file.path("code", "sampling_functions.R"))
 source(file.path("code", "utils.R")) # utils.R must define estimate_ipw()
+source(file.path("code", "nps_prior.R")) # NPS prior helper functions
 source(file.path("code", "models", "bulm.R"))
 source(file.path("code", "models", "VSW.R"))
 
@@ -94,7 +92,6 @@ alpha <- .05
 mcmc_iter <- 1000
 mcmc_burn <- 1000
 n_chains <- 2
-power_prior_a <- 0.5  # Power prior exponent for NPS Prior method (0-1)
 N_pop <- nrow(acs_pop)
 pop_mean <- mean(acs_pop[[response_var]], na.rm = TRUE)
 cat(
@@ -111,8 +108,9 @@ Nsim <- 1
 prob_samples <- list()
 nonprob_samples <- list()
 results <- list()
-summary_df_VSW <- list()
 for (sim in 1:Nsim) {
+  set.seed(99 + sim)  # Reproducible seed for each simulation
+  stan_seed <- 99 + sim
   print(sim)
 
   # 1. Draw probability and nonprobability samples
@@ -137,6 +135,8 @@ for (sim in 1:Nsim) {
   )
 
   # 2. Scale weights for pseudolikelihood models
+  # Rescales weights to sum to sample size (for Bayesian pseudolikelihood)
+  # Used by: BULM, NPS Prior (NOT used by design-based HT estimators)
   ps_scale_weights <- length(ps_sample$idx) * ps_sample$weights / sum(ps_sample$weights)
   nps_scale_weights <- length(nps_sample$idx) * nps_sample$weights / sum(nps_sample$weights)
 
@@ -189,7 +189,7 @@ for (sim in 1:Nsim) {
     weights = ps_scale_weights,
     puma = apply(Psi_ps, 1, which.max),
     X = X_ps,
-    sigma2_beta = 3
+    sigma2_beta = 3  # Prior variance for fixed effects (weakly informative)
   )
 
   bulm_stan_out <- stan_bulm_mod$sample(
@@ -198,7 +198,8 @@ for (sim in 1:Nsim) {
     parallel_chains = n_chains,
     iter_warmup = mcmc_burn,
     iter_sampling = mcmc_iter,
-    threads_per_chain = 4
+    threads_per_chain = 4,
+    seed = stan_seed
   )
 
   bulm_ps_out <- post_preds(
@@ -223,6 +224,9 @@ for (sim in 1:Nsim) {
   PUMAs <- c(ps$PUMA, nps$PUMA)
 
   # 3.2 IPW Weight Estimation (beta_reg & weighted methods)
+  # TODO: Clarify difference between these methods with Dan (see OUTSTANDING_ISSUES.md)
+  # - "beta_reg": Propensity score from beta regression?
+  # - "weighted": Unconditional/marginal weighting?
   weights_beta <- estimate_ipw(ps, nps, X_formula, "beta_reg")
   weights_uncond <- estimate_ipw(ps, nps, X_formula, "weighted")
   weights_beta <- c(weights_beta$ps_ipw, weights_beta$nps_ipw)
@@ -231,8 +235,10 @@ for (sim in 1:Nsim) {
   scale_weights_uncond <- weights_uncond / sum(weights_uncond) * length(y)
 
   # 3.3 HT Direct Estimates (Horvitz-Thompson with IPW)
-  beta_df <- data.frame(PUBCOV = y, PUMA = PUMAs, weights = weights_beta)
-  uncond_df <- data.frame(PUBCOV = y, PUMA = PUMAs, weights = weights_uncond)
+  beta_df <- data.frame(response = y, PUMA = PUMAs, weights = weights_beta)
+  names(beta_df)[1] <- response_var
+  uncond_df <- data.frame(response = y, PUMA = PUMAs, weights = weights_uncond)
+  names(uncond_df)[1] <- response_var
   beta_HT <- HT(beta_df, "beta_HT")
   uncond_HT <- HT(uncond_df, "uncond_HT")
 
@@ -245,7 +251,8 @@ for (sim in 1:Nsim) {
     n_chains = n_chains, mcmc_burn = mcmc_burn,
     mcmc_iter = mcmc_iter, alpha = alpha,
     grouped_pop_df = acs_pop_grouped,
-    X_formula = X_formula, Psi_formula = Psi_formula
+    X_formula = X_formula, Psi_formula = Psi_formula,
+    seed = stan_seed
   )
   bulm_beta_out$model <- "bulm_beta"
 
@@ -254,22 +261,30 @@ for (sim in 1:Nsim) {
     n_chains = n_chains, mcmc_burn = mcmc_burn,
     mcmc_iter = mcmc_iter, alpha = alpha,
     grouped_pop_df = acs_pop_grouped,
-    X_formula = X_formula, Psi_formula = Psi_formula
+    X_formula = X_formula, Psi_formula = Psi_formula,
+    seed = stan_seed
   )
   bulm_uncond_out$model <- "bulm_uncond"
 
   # ============================================================
   # METHOD 4: MRP VARIANTS
   # ============================================================
+  # MRP Naming Convention (see papers/si-mrp-paper.pdf):
+  # - MRP-R: Poststratifies on reweighted PS sample (needs bootstrap for sampling uncertainty)
+  # - MRP-P: Poststratifies on population frame (no bootstrap needed)
+  # - MRP-INT: Integrates PS + NPS in joint model with selection correction
+  #   - adjust=TRUE: PS weights scaled by (N_hat - n_np)/N_hat to account for NPS
 
   # 4.1 Basic MRP (MRP-R and MRP-P)
   mrp <- getMRP(
     MR = nps,
     ps = ps,
-    acs_pop = acs_pop
+    acs_pop = acs_pop,
+    bootstrap = TRUE,  # Bootstrap needed for MRP-R uncertainty (not for MRP-P)
+    seed = stan_seed
   )
-  mrpr <- mrp$puma_summary_mrpr  # MRP-R (PS poststratification)
-  mrpp <- mrp$puma_summary_mrpp  # MRP-P (Population poststratification)
+  mrpr <- mrp$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
+  mrpp <- mrp$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
 
   # 4.2 MRP with Integration (MRP-INT-R and MRP-INT-P)
   mrp1 <- getMRP_INT(
@@ -277,37 +292,52 @@ for (sim in 1:Nsim) {
     ps = ps,
     acs_pop = acs_pop,
     mod = modINT,
-    adjust = TRUE
+    adjust = TRUE,      # Adjust PS weights for population size (recommended)
+    bootstrap = TRUE,    # Bootstrap needed for MRP-INT-R uncertainty
+    seed = stan_seed
   )
-  mrpint_r <- mrp1$puma_summary_mrpr  # MRP-INT-R (PS poststratification)
-  mrpint_p <- mrp1$puma_summary_mrpp  # MRP-INT-P (Population poststratification)
+  mrpint_r <- mrp1$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
+  mrpint_p <- mrp1$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
 
   # ============================================================
   # METHOD 5: VSW METHOD
   # ============================================================
-  result_VSW <- vsw_out(ps[, !colnames(ps) %in% "weights"], nps, X_formula, response = response_var) 
-  # This function returns a data frame with columns: "PUMA", "VSW_point_est", "ps_est", "nps_est", "pooled_results", "lower_CI", "upper_CI", "model"
+  # VSW: Variance-Scaled Weighting (see papers/aliste-et-al-2025-vsw-method.pdf)
+  # NOTE: VSW does not produce interval estimates
+  result_VSW <- vsw_out(ps[, !colnames(ps) %in% "weights"], nps, X_formula, response = response_var)
   VSW_out <- result_VSW[,c("PUMA","VSW_point_est","lower_CI","upper_CI","model")]
   colnames(VSW_out) <- colnames(direst)
 
   # ============================================================
   # METHOD 6: NPS PRIOR METHOD (POWER PRIOR)
   # ============================================================
-  # Build fixed-effects design matrices (X only, no spatial random effects)
-  X_ps_fixed <- X_ps
-  X_nps_fixed <- X_nps
+  # Adaptive power prior: uses Hotelling T^2 test to compare PS/NPS coefficient estimates
+  # Returns p-value as power parameter `a`:
+  #   - a ≈ 1.0: Strong PS-NPS agreement → NPS gets high weight
+  #   - a ≈ 0.5: Moderate agreement → NPS gets moderate weight
+  #   - a ≈ 0.0: Poor agreement → NPS downweighted (high bias suspected)
+  # Following Salvatore et al. (2024) approach
+  adaptive_result <- calculate_adaptive_power_prior_a(
+    y_ps = y_ps,
+    X_ps = X_ps,
+    y_nps = y_nps,
+    X_nps = X_nps,
+    verbose = TRUE
+  )
+
+  power_prior_a_used <- adaptive_result$a
 
   # Prepare Stan data
   nps_prior_data <- list(
     n = length(y_ps),
     n_np = length(y_nps),
-    p = ncol(X_ps_fixed),
-    X = X_ps_fixed,
-    X_np = X_nps_fixed,
+    p = ncol(X_ps),
+    X = X_ps,
+    X_np = X_nps,
     y = y_ps,
     y_np = y_nps,
     w = ps_scale_weights,
-    a = power_prior_a
+    a = power_prior_a_used
   )
 
   # Sample from Stan model
@@ -318,7 +348,8 @@ for (sim in 1:Nsim) {
     iter_warmup = mcmc_burn,
     iter_sampling = mcmc_iter,
     threads_per_chain = 4,
-    refresh = 0  # Suppress progress messages
+    refresh = 0,  # Suppress progress messages
+    seed = stan_seed
   )
 
   # Extract posterior draws of beta
@@ -340,16 +371,20 @@ for (sim in 1:Nsim) {
   )
 
   # Aggregate by PUMA
-  puma_preds <- acs_pop_grouped %>%
-    select(PUMA, n) %>%
-    mutate(pred_matrix = asplit(preds, 1)) %>%
+  cell_preds_df <- data.frame(
+    PUMA = acs_pop_grouped$PUMA,
+    n = acs_pop_grouped$n,
+    preds = I(asplit(preds, 1))
+  )
+
+  puma_preds <- cell_preds_df %>%
     group_by(PUMA) %>%
     summarize(
       n_total = sum(n),
-      pred_sums = list(colSums(do.call(rbind, pred_matrix))),
+      pred_sums = list(colSums(do.call(rbind, preds))),
       .groups = "drop"
     ) %>%
-    mutate(pred_probs = map(pred_sums, ~ .x / n_total)) %>%
+    mutate(pred_probs = map2(pred_sums, n_total, ~ .x / .y)) %>%
     mutate(
       point_est = map_dbl(pred_probs, mean),
       lower_CI = map_dbl(pred_probs, ~ quantile(.x, alpha / 2)),
@@ -393,7 +428,23 @@ summary_df <- true_values %>%
     `Int. Score` = mean(int_score(alpha, response_true, lower_CI, upper_CI))
   )
 
-# VSW method doesn't have uncertainty quantification, so I return NA's for them. That'swhy I calculated it alone.
+# VSW doesn't produce interval estimates, so Coverage and Interval Score will be NA
+
+# Print results to console
+cat(
+  "\nSimulation complete. Summary by model (averaged over",
+  Nsim, ifelse(Nsim == 1, "simulation", "simulations"), "):\n"
+)
+print(summary_df %>% arrange(MSE))
+
+cat("\nExample PUMA-level estimates from the first simulation:\n")
+print(
+  results_df %>%
+    filter(sim_num == min(as.numeric(sim_num))) %>%
+    arrange(PUMA, model) %>%
+    select(PUMA, model, point_est, lower_CI, upper_CI) %>%
+    slice_head(n = 20)
+)
 
 # Save results
 save(
