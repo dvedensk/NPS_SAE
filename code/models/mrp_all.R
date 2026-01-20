@@ -107,7 +107,8 @@ getMRP=function(MR=nps,
                 acs_pop=acs_pop,
                 bootstrap=FALSE,
                 L=100,
-                threads=4){
+                threads=4,
+                seed=NULL){
 
   # Validate L parameter
   if (bootstrap && (is.null(L) || L < 1)) {
@@ -155,16 +156,17 @@ getMRP=function(MR=nps,
   )
   
 
-  
-  fit <- mod$sample(
+  sample_args <- list(
     data = stan_data,
     chains = 2,
     parallel_chains = 2,
     threads_per_chain = threads,
     iter_warmup = 500,
-    iter_sampling = 1000,
-    seed = 123
+    iter_sampling = 1000
   )
+  if (!is.null(seed)) sample_args$seed <- seed
+  
+  fit <- do.call(mod$sample, sample_args)
   
   sum_tbl <- fit$summary()
   
@@ -396,7 +398,8 @@ getMRP_INT <- function(MR,
                        adjust=TRUE,
                        bootstrap=FALSE,
                        L=100,
-                       threads=4
+                       threads=4,
+                       seed=NULL
 ) {
 
   # Validate L parameter
@@ -580,15 +583,17 @@ getMRP_INT <- function(MR,
     
   )
   ## 3) FIT STAN (MRP-INT) ----------------------------------------------------
-  fit <- mod$sample(
+  sample_args <- list(
     data = stan_data,
     chains = 2,
     parallel_chains = 2,
     threads_per_chain = threads,
     iter_warmup = 500,
     iter_sampling = 1000
-    # seed = 1233
   )
+  if (!is.null(seed)) sample_args$seed <- seed
+  
+  fit <- do.call(mod$sample, sample_args)
   
   
   sum_tbl <- fit$summary()
@@ -728,4 +733,3 @@ getMRP_INT <- function(MR,
     adj_factor   = adj_factor
   )
 }
-
