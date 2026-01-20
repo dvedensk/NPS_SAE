@@ -108,6 +108,7 @@ getMRP=function(MR=nps,
                 bootstrap=FALSE,
                 L=100,
                 threads=4,
+                n_chains=2,
                 seed=NULL){
 
   # Validate L parameter
@@ -158,8 +159,8 @@ getMRP=function(MR=nps,
 
   sample_args <- list(
     data = stan_data,
-    chains = 2,
-    parallel_chains = 2,
+    chains = n_chains,
+    parallel_chains = n_chains,
     threads_per_chain = threads,
     iter_warmup = 500,
     iter_sampling = 1000
@@ -399,6 +400,7 @@ getMRP_INT <- function(MR,
                        bootstrap=FALSE,
                        L=100,
                        threads=4,
+                       n_chains=2,
                        seed=NULL
 ) {
 
@@ -585,8 +587,8 @@ getMRP_INT <- function(MR,
   ## 3) FIT STAN (MRP-INT) ----------------------------------------------------
   sample_args <- list(
     data = stan_data,
-    chains = 2,
-    parallel_chains = 2,
+    chains = n_chains,
+    parallel_chains = n_chains,
     threads_per_chain = threads,
     iter_warmup = 500,
     iter_sampling = 1000

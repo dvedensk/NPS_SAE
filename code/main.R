@@ -46,9 +46,6 @@ nps_prior_mod <- cmdstan_model(
 
 Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
 
-
-set.seed(99)
-
 # ============================================================
 # CONFIGURATION: Set response & Data Defect Correlation
 # ============================================================
@@ -118,7 +115,7 @@ results <- list()
 for (sim in 1:Nsim) {
   curr_seed <- 99 + sim
   set.seed(curr_seed) # Reproducible seed for each simulation
-  print(sim) # CODEX - Can you have a better print statement here?
+  cat("Starting simulation", sim, "with seed", curr_seed, "\n")
 
   # 1. Draw probability and nonprobability samples
   ps_sample <- get_strat_PS(pop_df = acs_pop, samp_frac = .005, weight_config = PS_weight_config)
@@ -289,7 +286,8 @@ for (sim in 1:Nsim) {
     ps = ps,
     acs_pop = acs_pop,
     bootstrap = TRUE, # Bootstrap needed for MRP-R uncertainty (not for MRP-P)
-    seed = curr_seed
+    seed = curr_seed,
+    n_chains = n_chains
   )
   mrpr <- mrp$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpp <- mrp$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
@@ -302,7 +300,8 @@ for (sim in 1:Nsim) {
     mod = modINT,
     adjust = TRUE, # Adjust PS weights for population size (recommended)
     bootstrap = TRUE, # Bootstrap needed for MRP-INT-R uncertainty
-    seed = curr_seed
+    seed = curr_seed,
+    n_chains = n_chains
   )
   mrpint_r <- mrp1$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpint_p <- mrp1$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
