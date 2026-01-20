@@ -67,7 +67,9 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
     nps_prob_pred  <- predict(fit_prop, newdata = nps, type = "response")
   }
 
-  # FIXME: if method == ignorable (used in main), nps_prob_pred is never defined
+  # NOTE: "ignorable" method is accepted but not implemented. Only "beta_reg" and
+  # "weighted" are currently used. If "ignorable" is called, nps_prob_pred will
+  # be undefined and will error on the next line.
   nps_weights <- 1/nps_prob_pred
 
   # Normalize 
@@ -81,4 +83,39 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
 
   return(list(nps_ipw = nps_weights,
               ps_ipw = ps_weights))
+}
+
+# Horvitz-Thompson (HT) Direct Estimator
+#
+# Calculates direct estimates by PUMA using survey-weighted Horvitz-Thompson estimator.
+# Used for IPW-based direct estimation where weights combine PS and NPS samples.
+#
+# @param df Data frame with columns: response variable, PUMA (area), weights
+# @param model_name String to label the model in output
+# @param response_var Name of response variable
+# @param alpha Significance level for confidence intervals
+# @return Data frame with PUMA-level estimates: PUMA, point_est, lower_CI, upper_CI, model
+HT <- function(df, model_name, response_var, alpha) {
+  samp.design <- survey::svydesign(ids = ~1, weights = ~weights, data = df)
+
+  # Calculate direct estimates by PUMA with standard errors
+  direst <- survey::svyby(
+    as.formula(paste0("~", response_var)),
+    ~PUMA,
+    samp.design,
+    survey::svymean,
+    na.rm = TRUE,
+    vartype = "se",
+    keep.names = FALSE
+  ) %>%
+    dplyr::arrange(PUMA) %>%
+    dplyr::transmute(
+      PUMA,
+      point_est = .data[[response_var]],
+      lower_CI = point_est + qnorm(alpha / 2) * se,
+      upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+      model = model_name
+    )
+
+  return(direst)
 }
