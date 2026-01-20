@@ -1,4 +1,4 @@
-library(tidyverse)  # Loads readr, dplyr, purrr, ggplot2, etc.
+library(tidyverse) # Loads readr, dplyr, purrr, ggplot2, etc.
 library(sampling)
 library(mvtnorm)
 library(survey)
@@ -50,7 +50,7 @@ Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
 set.seed(99)
 
 # ============================================================
-# CONFIGURATION: Response variable and sampling weights
+# CONFIGURATION: Set response & Data Defect Correlation
 # ============================================================
 # Response variable to analyze (must exist in ACS_NPS_pop.csv)
 response_var <- "PUBCOV" # Default: PUBCOV (binary). Can also use HICOV, WAGP, etc.
@@ -60,9 +60,19 @@ response_type <- "binary" # PUBCOV is 0/1 in processed population
 PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 
 # NPS sampling weight configuration (for PUBCOV: use PWGTP=0.3, AGEP=0.7)
+# IMPORTANT: Increasing the weight on AGEP will uniformly increase DDC for PUBCOV
 NPS_weight_config <- list(PWGTP = 0.3, AGEP = 0.7)
-# ============================================================
 
+# Other simulation parameters
+Nsim <- 1
+alpha <- .05 # for interval estimates
+mcmc_iter <- 1000
+mcmc_burn <- 1000
+n_chains <- 2
+
+# ============================================================
+# LOAD POPULATION DATA
+# ============================================================
 # load population file
 # Note: AGEP is continuous (for sampling weights), AGEP_binned is categorical (for modeling)
 acs_pop <- read_csv(file.path("data", "ACS_NPS_pop.csv")) %>%
@@ -88,10 +98,6 @@ acs_pop_grouped <- acs_pop %>%
 X_formula <- as.formula("~ AGEP_binned + RAC1P + SEX")
 Psi_formula <- as.formula("~ -1 + PUMA")
 
-alpha <- .05
-mcmc_iter <- 1000
-mcmc_burn <- 1000
-n_chains <- 2
 N_pop <- nrow(acs_pop)
 pop_mean <- mean(acs_pop[[response_var]], na.rm = TRUE)
 cat(
@@ -103,15 +109,16 @@ cat(
   "\n\n"
 )
 
-# take samples
-Nsim <- 1
+# ============================================================
+# MAIN SIMULATION FOR-LOOP
+# ============================================================
 prob_samples <- list()
 nonprob_samples <- list()
 results <- list()
 for (sim in 1:Nsim) {
-  set.seed(99 + sim)  # Reproducible seed for each simulation
-  stan_seed <- 99 + sim
-  print(sim)
+  curr_seed <- 99 + sim
+  set.seed(curr_seed) # Reproducible seed for each simulation
+  print(sim) # CODEX - Can you have a better print statement here?
 
   # 1. Draw probability and nonprobability samples
   ps_sample <- get_strat_PS(pop_df = acs_pop, samp_frac = .005, weight_config = PS_weight_config)
@@ -189,7 +196,7 @@ for (sim in 1:Nsim) {
     weights = ps_scale_weights,
     puma = apply(Psi_ps, 1, which.max),
     X = X_ps,
-    sigma2_beta = 3  # Prior variance for fixed effects (weakly informative)
+    sigma2_beta = 3 # Prior variance for fixed effects (weakly informative)
   )
 
   bulm_stan_out <- stan_bulm_mod$sample(
@@ -199,7 +206,7 @@ for (sim in 1:Nsim) {
     iter_warmup = mcmc_burn,
     iter_sampling = mcmc_iter,
     threads_per_chain = 4,
-    seed = stan_seed
+    seed = curr_seed
   )
 
   bulm_ps_out <- post_preds(
@@ -252,7 +259,7 @@ for (sim in 1:Nsim) {
     mcmc_iter = mcmc_iter, alpha = alpha,
     grouped_pop_df = acs_pop_grouped,
     X_formula = X_formula, Psi_formula = Psi_formula,
-    seed = stan_seed
+    seed = curr_seed
   )
   bulm_beta_out$model <- "bulm_beta"
 
@@ -262,26 +269,27 @@ for (sim in 1:Nsim) {
     mcmc_iter = mcmc_iter, alpha = alpha,
     grouped_pop_df = acs_pop_grouped,
     X_formula = X_formula, Psi_formula = Psi_formula,
-    seed = stan_seed
+    seed = curr_seed
   )
   bulm_uncond_out$model <- "bulm_uncond"
 
   # ============================================================
   # METHOD 4: MRP VARIANTS
   # ============================================================
-  # MRP Naming Convention (see papers/si-mrp-paper.pdf):
-  # - MRP-R: Poststratifies on reweighted PS sample (needs bootstrap for sampling uncertainty)
-  # - MRP-P: Poststratifies on population frame (no bootstrap needed)
-  # - MRP-INT: Integrates PS + NPS in joint model with selection correction
-  #   - adjust=TRUE: PS weights scaled by (N_hat - n_np)/N_hat to account for NPS
+  # MRP Naming Convention:
+  #   There is a MRP (plain) vs MRP-INT which integrates PS + NPS in joint model with selection correction
+  #   Each of these MRP and MPR-INT has two different ways of poststratifying
+  #     - R: Poststratifies on reweighted PS sample
+  #     - P: Poststratifies on population frame (no bootstrap needed)
+  # NOTE: adjust=TRUE --> PS weights scaled by (N_hat - n_np)/N_hat to account for NPS
 
   # 4.1 Basic MRP (MRP-R and MRP-P)
   mrp <- getMRP(
     MR = nps,
     ps = ps,
     acs_pop = acs_pop,
-    bootstrap = TRUE,  # Bootstrap needed for MRP-R uncertainty (not for MRP-P)
-    seed = stan_seed
+    bootstrap = TRUE, # Bootstrap needed for MRP-R uncertainty (not for MRP-P)
+    seed = curr_seed
   )
   mrpr <- mrp$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpp <- mrp$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
@@ -292,9 +300,9 @@ for (sim in 1:Nsim) {
     ps = ps,
     acs_pop = acs_pop,
     mod = modINT,
-    adjust = TRUE,      # Adjust PS weights for population size (recommended)
-    bootstrap = TRUE,    # Bootstrap needed for MRP-INT-R uncertainty
-    seed = stan_seed
+    adjust = TRUE, # Adjust PS weights for population size (recommended)
+    bootstrap = TRUE, # Bootstrap needed for MRP-INT-R uncertainty
+    seed = curr_seed
   )
   mrpint_r <- mrp1$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpint_p <- mrp1$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
@@ -305,7 +313,7 @@ for (sim in 1:Nsim) {
   # VSW: Variance-Scaled Weighting (see papers/aliste-et-al-2025-vsw-method.pdf)
   # NOTE: VSW does not produce interval estimates
   result_VSW <- vsw_out(ps[, !colnames(ps) %in% "weights"], nps, X_formula, response = response_var)
-  VSW_out <- result_VSW[,c("PUMA","VSW_point_est","lower_CI","upper_CI","model")]
+  VSW_out <- result_VSW[, c("PUMA", "VSW_point_est", "lower_CI", "upper_CI", "model")]
   colnames(VSW_out) <- colnames(direst)
 
   # ============================================================
@@ -348,8 +356,8 @@ for (sim in 1:Nsim) {
     iter_warmup = mcmc_burn,
     iter_sampling = mcmc_iter,
     threads_per_chain = 4,
-    refresh = 0,  # Suppress progress messages
-    seed = stan_seed
+    refresh = 0, # Suppress progress messages
+    seed = curr_seed
   )
 
   # Extract posterior draws of beta
@@ -399,18 +407,18 @@ for (sim in 1:Nsim) {
   # COMBINE ALL RESULTS
   # ============================================================
   results[[sim]] <- rbind(
-    direst,              # METHOD 1
-    bulm_ps_out,         # METHOD 2
-    beta_HT,             # METHOD 3.3
-    uncond_HT,           # METHOD 3.3
-    bulm_beta_out,       # METHOD 3.4
-    bulm_uncond_out,     # METHOD 3.4
-    mrpr,                # METHOD 4.1
-    mrpp,                # METHOD 4.1
-    mrpint_r,            # METHOD 4.2
-    mrpint_p,            # METHOD 4.2
-    VSW_out,             # METHOD 5
-    nps_prior_out        # METHOD 6
+    direst, # METHOD 1
+    bulm_ps_out, # METHOD 2
+    beta_HT, # METHOD 3.3
+    uncond_HT, # METHOD 3.3
+    bulm_beta_out, # METHOD 3.4
+    bulm_uncond_out, # METHOD 3.4
+    mrpr, # METHOD 4.1
+    mrpp, # METHOD 4.1
+    mrpint_r, # METHOD 4.2
+    mrpint_p, # METHOD 4.2
+    VSW_out, # METHOD 5
+    nps_prior_out # METHOD 6
   )
 }
 
