@@ -87,6 +87,11 @@ Psi_formula <- as.formula("~ -1 + PUMA")
 
 alpha <- .05
 
+# NPS prior configuration
+# Choose from: "pp", "md", "mdl", "mdl10"
+nps_prior_which <- c("pp")
+scale_nps_prior_weight_covariate <- TRUE
+
 # take samples
 Nsim <- 1
 prob_samples <- list()
@@ -121,9 +126,6 @@ for (sim in 1:Nsim) {
   ps <- acs_pop[ps$idx, ]
   nps <- acs_pop[nps$idx, ]
 
-  PUMA <- ps$PUMA
-  PUMA_levels <- unique(PUMA)
-  
   # 4. Build design matrices for PS and NPS separately
   X_ps <- model.matrix(X_formula, data = ps)
   Psi_ps <- model.matrix(Psi_formula, data = ps)
@@ -216,11 +218,24 @@ for (sim in 1:Nsim) {
   bulm_ipw$model <- "bulm_ipw"
 
   # 10. Fit NPS-informed prior model (Ethan)
+  domain_levels <- sort(unique(c(as.character(ps$PUMA), as.character(nps$PUMA))))
+  domain_ps <- match(ps$PUMA, domain_levels)
+  domain_nps <- match(nps$PUMA, domain_levels)
+  PUMA <- factor(ps$PUMA, levels = domain_levels)
+  PUMA_levels <- sort(unique(as.character(ps$PUMA)))
 
-  # The NPS prior method involves an MLE, so 
-  # we need to remove one PUMA indicator to avoid multicollinearity
-  Psi_ps_red <- Psi_ps[,1:(ncol(Psi_ps)-1)]
-  Psi_nps_red <- Psi_nps[,1:(ncol(Psi_nps)-1)]
+  power_prior_a <- NULL
+  if ("pp" %in% nps_prior_which) {
+    # Pre-compute power-prior exponent once per sample (matches sim_init_testing)
+    adaptive_res <- calculate_adaptive_power_prior_a(
+      y_ps = y_ps,
+      X_ps = X_ps,
+      y_nps = y_nps,
+      X_nps = X_nps,
+      verbose = TRUE
+    )
+    power_prior_a <- adaptive_res$a
+  }
 
   # TODO: benchmark the Stan implementation
   # TODO: figure out why the freeze
@@ -229,9 +244,9 @@ for (sim in 1:Nsim) {
     nps_prior_md,
     nps_prior_pp, 
     y_ps, 
-    X_ps, #cbind(X_ps, Psi_ps_red), 
+    X_ps, 
     y_nps, 
-    X_nps,#cbind(X_nps, Psi_nps_red), 
+    X_nps, 
     ps_scale_weights, 
     PUMA, 
     PUMA_levels,
@@ -240,7 +255,12 @@ for (sim in 1:Nsim) {
     niter = 500, 
     warmup = 500,
     chains = 4,
-    seed = 99
+    seed = 99,
+    which_prior = nps_prior_which,
+    a = power_prior_a,
+    domain_ps = domain_ps,
+    domain_nps = domain_nps,
+    domain_levels = domain_levels
   )
 
   rake_vars <- c("AGEP_binned", "RAC1P", "SEX")
@@ -275,7 +295,14 @@ for (sim in 1:Nsim) {
     niter = 50, 
     warmup = 50,
     chains = 4,
-    seed = 99
+    seed = 99,
+    which_prior = nps_prior_which,
+    a = power_prior_a,
+    domain_ps = domain_ps,
+    domain_nps = domain_nps,
+    domain_levels = domain_levels,
+    weight_covariate = list(ps = ps_scale_weights, nps = nps_rake_weights),
+    scale_weight_covariate = scale_nps_prior_weight_covariate
   )
 
   # 11. Fit MRP (Qianyu)
