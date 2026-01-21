@@ -4,6 +4,8 @@
 format_stan_output <- function(
   X,
   beta_draws, 
+  eta_draws,
+  domain_index,
   PUMA, 
   PUMA_levels, 
   typeIerr, 
@@ -16,6 +18,10 @@ format_stan_output <- function(
   # Draw linear predictor and then sample 1 with probability expit(eta), 0 otherwise
   # (Using latent Uniform(0,1) variates makes this extremely fast).
   eta <- tcrossprod(X, beta_draws) # n x S
+  if (!is.null(eta_draws)) {
+    eta_domain <- t(eta_draws[, domain_index, drop = FALSE])
+    eta <- eta + eta_domain
+  }
   P <- plogis(eta)
   U <- matrix(runif(n * S), n, S)
   y_pred <- (U < P)
@@ -40,6 +46,92 @@ format_stan_output <- function(
   return(res_df)
 }
 
+scale_weight_covariate <- function(x, scale_covariate) {
+  # Keeps optional z-scoring for weight-as-covariate usage; helps match standardized priors
+  x <- as.numeric(x)
+  if (!scale_covariate) {
+    return(x)
+  }
+  mu <- mean(x)
+  sigma <- stats::sd(x)
+  if (is.na(sigma) || sigma == 0) {
+    return(x - mu)
+  }
+  (x - mu) / sigma
+}
+
+prepare_weight_covariate <- function(weight_covariate, n, n_np, scale_covariate) {
+  if (is.null(weight_covariate)) {
+    return(list(ps = NULL, nps = NULL))
+  }
+  if (!is.list(weight_covariate)) {
+    stop("weight_covariate must be a list with components ps and nps.")
+  }
+  ps <- weight_covariate$ps
+  nps <- weight_covariate$nps
+  if (is.null(ps) || is.null(nps)) {
+    stop("weight_covariate must include both ps and nps vectors.")
+  }
+  if (length(ps) != n || length(nps) != n_np) {
+    stop("weight_covariate lengths must match y and y_NP lengths.")
+  }
+
+  list(
+    ps = scale_weight_covariate(ps, scale_covariate),
+    nps = scale_weight_covariate(nps, scale_covariate)
+  )
+}
+
+calculate_adaptive_power_prior_a <- function(y_ps, X_ps, y_nps, X_nps, verbose = TRUE) {
+  # Fit GLMs to get MLEs
+  glm_ps <- glm(y_ps ~ X_ps - 1, family = binomial())
+  glm_nps <- glm(y_nps ~ X_nps - 1, family = binomial())
+
+  beta_ps_hat <- coef(glm_ps)
+  beta_nps_hat <- coef(glm_nps)
+  diff_vec <- beta_ps_hat - beta_nps_hat
+
+  # Hotelling T^2 test
+  n_ps <- length(y_ps)
+  p_coef <- ncol(X_ps)
+  cov_beta_ps <- vcov(glm_ps)
+
+  # T^2 statistic
+  t2 <- as.numeric(t(diff_vec) %*% solve(cov_beta_ps) %*% diff_vec)
+
+  # Convert to F-statistic
+  f_scaling <- p_coef * (n_ps - 1) / (n_ps - p_coef)
+  f_stat <- t2 / f_scaling
+
+  # p-value becomes the power prior exponent
+  adaptive_a <- pf(f_stat, p_coef, n_ps - p_coef, lower.tail = FALSE)
+
+  if (verbose) {
+    cat(
+      "\nAdaptive Power Prior Exponent Calculation:",
+      "\n- Hotelling T^2:", round(t2, 4),
+      "\n- F-statistic:", round(f_stat, 4),
+      "\n- p-value:", round(adaptive_a, 4),
+      "\n- Adaptive a:", round(adaptive_a, 4),
+      "\n\nInterpretation:",
+      "\n- a ≈ 1.0: Strong PS-NPS agreement → NPS gets high weight",
+      "\n- a ≈ 0.5: Moderate agreement → NPS gets moderate weight",
+      "\n- a ≈ 0.0: Poor agreement → NPS gets low weight (high bias suspected)",
+      "\n\n"
+    )
+  }
+
+  return(list(
+    a = adaptive_a,
+    t2 = t2,
+    f_stat = f_stat,
+    p_value = adaptive_a,
+    beta_ps = beta_ps_hat,
+    beta_nps = beta_nps_hat,
+    diff = diff_vec
+  ))
+}
+
 # Main function for getting predictions from all four prior specifications
 nps_prior_mcmc <- function(
     md_mod, 
@@ -56,11 +148,26 @@ nps_prior_mcmc <- function(
     niter = 4000, 
     warmup = 1000,
     chains = 4,
-    seed = 99
+    seed = 99,
+    which_prior = c("pp", "md", "mdl", "mdl10"),
+    a = NULL,
+    domain_ps = NULL,
+    domain_nps = NULL,
+    domain_levels = NULL,
+    weight_covariate = NULL,
+    scale_weight_covariate = TRUE,
+    refresh = 10,
+    threads_per_chain = NULL,
+    parallel_chains = NULL
 ) {
   n <- length(y)
-  p <- ncol(X)
   n_np <- length(y_NP)
+
+  which_prior <- unique(which_prior)
+  valid_priors <- c("pp", "md", "mdl", "mdl10")
+  if (!all(which_prior %in% valid_priors)) {
+    stop("which_prior must be one or more of: pp, md, mdl, mdl10.")
+  }
 
   if(is.null(wts)) { # If not using pseudolikelihood
     wts <- rep(1, n)
@@ -75,180 +182,224 @@ nps_prior_mcmc <- function(
     }
   }
 
-  # Get MLEs for regression coefficients from each sample
-  # PS
-  glm_fit <- glm(y ~ X - 1, binomial())
-  beta_hat <- coef(glm_fit) %>% 
-      as.numeric()
+  X_eff <- X
+  X_NP_eff <- X_NP
 
-  stopifnot("Some coefficients are NA; X may be ill-conditioned." = !anyNA(beta_hat))
+  weight_covs <- prepare_weight_covariate(weight_covariate, n, n_np, scale_weight_covariate)
+  if (!is.null(weight_covs$ps)) {
+    X_eff <- cbind(X_eff, weight_covs$ps)
+    X_NP_eff <- cbind(X_NP_eff, weight_covs$nps)
+  }
 
-  # NPS
-  glm_fit_NP <- glm(y_NP ~ X_NP - 1, binomial())
-  beta_NP_hat <- coef(glm_fit_NP) %>% 
-      as.numeric()
+  p <- ncol(X_eff)
 
-  stopifnot("Some coefficients are NA; X_NP may be ill-conditioned." = !anyNA(beta_hat))
-  
-  diff_vec <- beta_hat - beta_NP_hat
-  sq_dist <- diff_vec^2
+  need_md <- any(which_prior %in% c("md", "mdl", "mdl10"))
+  need_pp <- "pp" %in% which_prior
+  need_glm <- need_md || (need_pp && is.null(a))
 
-  # Mixed-distance prior
-  prior_sds <- sqrt(sq_dist)
+  if (need_glm) {
+    # Get MLEs for regression coefficients from each sample
+    # PS
+    glm_fit <- glm(y ~ X_eff - 1, binomial())
+    beta_hat <- coef(glm_fit) %>% 
+        as.numeric()
+
+    stopifnot("Some coefficients are NA; X may be ill-conditioned." = !anyNA(beta_hat))
+
+    # NPS
+    glm_fit_NP <- glm(y_NP ~ X_NP_eff - 1, binomial())
+    beta_NP_hat <- coef(glm_fit_NP) %>% 
+        as.numeric()
+
+    stopifnot("Some coefficients are NA; X_NP may be ill-conditioned." = !anyNA(beta_hat))
+    
+    diff_vec <- beta_hat - beta_NP_hat
+    sq_dist <- diff_vec^2
+  }
 
   # Set up basic Stan data list
+  if (is.null(domain_ps) || is.null(domain_nps)) {
+    stop("domain_ps and domain_nps must be provided for domain random effects.")
+  }
+  if (is.null(domain_levels)) {
+    domain_levels <- sort(unique(c(domain_ps, domain_nps)))
+  }
+  J <- length(domain_levels)
+
   stan_data <- list(
     n = n,
     p = p,
-    X = X,
+    J = J,
+    X = X_eff,
     y = y,
-    w = as.numeric(wts)
-  ) 
-
-  md_base_data <- c(stan_data, list(
-    beta_prior_mean = beta_NP_hat
-  ))
-
-  md_data <- c(md_base_data, list(
-    beta_prior_sd = prior_sds
-  ))
-
-  md_fit <- md_mod$sample(
-    data = md_data,
-    iter_sampling = niter,
-    iter_warmup = warmup,
-    chains = chains,
-    seed = seed,
-    refresh = 10
+    w = as.numeric(wts),
+    domain = as.integer(domain_ps)
   )
 
-  print(md_fit$summary()[,"rhat"])
+  run_sample <- function(mod, data) {
+    sample_args <- list(
+      data = data,
+      iter_sampling = niter,
+      iter_warmup = warmup,
+      chains = chains,
+      seed = seed,
+      refresh = refresh
+    )
+    if (!is.null(threads_per_chain)) {
+      sample_args$threads_per_chain <- threads_per_chain
+    }
+    if (!is.null(parallel_chains)) {
+      sample_args$parallel_chains <- parallel_chains
+    }
+    do.call(mod$sample, sample_args)
+  }
 
-  # Extract posterior draws
-  beta_draws <- md_fit$draws("beta", format = "matrix")
-  # Format into area-level summaries
-  md_res <- format_stan_output(
-    X, 
-    beta_draws, 
-    PUMA, 
-    PUMA_levels, 
-    typeIerr, 
-    paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance")
-  )
+  if (need_md) {
+    md_base_data <- c(stan_data, list(
+      beta_prior_mean = beta_NP_hat
+    ))
+  }
 
-  # for mixed-distance-log priors, we estimate the variance of the MLE 
-  # of each coefficient based on the NPS 
-  NP_vars <- glm_fit_NP %>% 
-    vcov() %>% 
-    diag() %>% 
-    as.numeric()
+  if ("md" %in% which_prior) {
+    # Mixed-distance prior
+    prior_sds <- sqrt(sq_dist)
 
-  maxes <- pmax(sq_dist, NP_vars) 
+    md_data <- c(md_base_data, list(
+      beta_prior_sd = prior_sds
+    ))
 
-  # Mixed-distance-log
-  prior_sds <- sqrt(maxes / log(n_NP))
+    md_fit <- run_sample(md_mod, md_data)
 
-  mdl_data <- c(md_base_data, list(
-    beta_prior_sd = prior_sds
-  ))
+    print(md_fit$summary()[,"rhat"])
 
-  mdl_fit <- md_mod$sample(
-    data = mdl_data,
-    iter_sampling = niter,
-    iter_warmup = warmup,
-    chains = chains,
-    seed = seed,
-    refresh = 10
-  )
+    # Extract posterior draws
+    beta_draws <- md_fit$draws("beta", format = "matrix")
+    eta_draws <- md_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    md_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance")
+    )
+  }
 
-  print(mdl_fit$summary()[,"rhat"])
+  if ("mdl" %in% which_prior || "mdl10" %in% which_prior) {
+    # for mixed-distance-log priors, we estimate the variance of the MLE 
+    # of each coefficient based on the NPS 
+    NP_vars <- glm_fit_NP %>% 
+      vcov() %>% 
+      diag() %>% 
+      as.numeric()
 
-  # Extract posterior draws
-  beta_draws <- mdl_fit$draws("beta", format = "matrix")
-  # Format into area-level summaries
-  mdl_res <- format_stan_output(
-    X, 
-    beta_draws, 
-    PUMA, 
-    PUMA_levels, 
-    typeIerr, 
-    paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log")
-  )
+    maxes <- pmax(sq_dist, NP_vars) 
+  }
 
-  prior_sds <- sqrt(maxes / log10(n_NP))
+  if ("mdl" %in% which_prior) {
+    # Mixed-distance-log
+    prior_sds <- sqrt(maxes / log(n_np))
 
-  mdl_ten_data <- c(md_base_data, list(
-    beta_prior_sd = prior_sds
-  ))
+    mdl_data <- c(md_base_data, list(
+      beta_prior_sd = prior_sds
+    ))
 
-  mdl_ten_fit <- md_mod$sample(
-    data = mdl_ten_data,
-    iter_sampling = niter,
-    iter_warmup = warmup,
-    chains = chains,
-    seed = seed,
-    refresh = 10
-  )
+    mdl_fit <- run_sample(md_mod, mdl_data)
 
-  print(mdl_ten_fit$summary()[,"rhat"])
+    print(mdl_fit$summary()[,"rhat"])
 
-  # Extract posterior draws
-  beta_draws <- mdl_ten_fit$draws("beta", format = "matrix")
-  # Format into area-level summaries
-  mdl_ten_res <- format_stan_output(
-    X, 
-    beta_draws, 
-    PUMA, 
-    PUMA_levels, 
-    typeIerr, 
-    paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log10")
-  )
+    # Extract posterior draws
+    beta_draws <- mdl_fit$draws("beta", format = "matrix")
+    eta_draws <- mdl_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    mdl_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log")
+    )
+  }
 
-  # Power Prior
-  # Set power prior exponent to p-value corresponding to Hotelling T^2 test
-  cov_beta_hat <- vcov(glm_fit)
-  t2 <- crossprod(diff_vec, (cov_beta_hat %>% chol() %>% chol2inv()) %*% diff_vec)
-  t2 <- as.numeric(t2)
-  f = p * (n - 1) / (n - p)
-  Fstat = t2 / f
-  a <- pf(Fstat, p, n - p, lower.tail = F)
+  if ("mdl10" %in% which_prior) {
+    prior_sds <- sqrt(maxes / log10(n_np))
 
-  pp_data <- c(stan_data, list(
-    n_np = n_NP,
-    X_np = X_NP, 
-    y_np = y_NP, 
-    a = a
-  ))
+    mdl_ten_data <- c(md_base_data, list(
+      beta_prior_sd = prior_sds
+    ))
 
-  pp_fit <- pp_mod$sample(
-    data = pp_data,
-    iter_sampling = niter,
-    iter_warmup = warmup,
-    chains = chains,
-    seed = seed,
-    refresh = 10
-  )
+    mdl_ten_fit <- run_sample(md_mod, mdl_ten_data)
 
-  print(pp_fit$summary()[,"rhat"])
+    print(mdl_ten_fit$summary()[,"rhat"])
 
-  # Extract posterior draws
-  beta_draws <- pp_fit$draws("beta", format = "matrix")
-  # Format into area-level summaries
-  pp_res <- format_stan_output(
-    X, 
-    beta_draws, 
-    PUMA, 
-    PUMA_levels, 
-    typeIerr, 
-    paste0("NPS Prior w/ ", raking_or_pl, ": Power Prior")
-  )
+    # Extract posterior draws
+    beta_draws <- mdl_ten_fit$draws("beta", format = "matrix")
+    eta_draws <- mdl_ten_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    mdl_ten_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log10")
+    )
+  }
 
-  res_df <- rbind(
-    md_res, 
-    mdl_res, 
-    mdl_ten_res,
-    pp_res
-  )
+  if (need_pp && is.null(a)) {
+    # Power Prior
+    # Set power prior exponent to p-value corresponding to Hotelling T^2 test
+    cov_beta_hat <- vcov(glm_fit)
+    t2 <- crossprod(diff_vec, (cov_beta_hat %>% chol() %>% chol2inv()) %*% diff_vec)
+    t2 <- as.numeric(t2)
+    f = p * (n - 1) / (n - p)
+    Fstat = t2 / f
+    a <- pf(Fstat, p, n - p, lower.tail = F)
+  }
+
+  if (need_pp) {
+    pp_data <- c(stan_data, list(
+      n_np = n_np,
+      X_np = X_NP_eff, 
+      y_np = y_NP, 
+      a = a,
+      domain_np = as.integer(domain_nps)
+    ))
+
+    pp_fit <- run_sample(pp_mod, pp_data)
+
+    print(pp_fit$summary()[,"rhat"])
+
+    # Extract posterior draws
+    beta_draws <- pp_fit$draws("beta", format = "matrix")
+    eta_draws <- pp_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    pp_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Power Prior")
+    )
+  }
+
+  res_list <- list()
+  if ("md" %in% which_prior) res_list[["md"]] <- md_res
+  if ("mdl" %in% which_prior) res_list[["mdl"]] <- mdl_res
+  if ("mdl10" %in% which_prior) res_list[["mdl10"]] <- mdl_ten_res
+  if ("pp" %in% which_prior) res_list[["pp"]] <- pp_res
+  res_df <- do.call(rbind, res_list)
   
   return(res_df)
 }
