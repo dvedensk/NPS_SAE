@@ -8,3 +8,9 @@ code/models/mrp_int2
 code/models/nps_prior_md
 code/models/nps_prior_pp
 todo.md
+elapsedRake.Rdata
+elapsed.Rdata
+nps_prior_pl_res.RDS
+nps_prior_rak_res.RDS
+rhat_Raking.Rdata 
+rhat_Pseudolikelihood.Rdata

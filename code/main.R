@@ -10,6 +10,7 @@ library(LaplacesDemon)
 library(parallelly)
 library(cmdstanr)
 library(rmarkdown)
+library(matrixStats)
 
 models_path <- file.path("code", "models")
 
@@ -31,12 +32,12 @@ modINT <- cmdstan_model(
 )
 
 nps_prior_md <- cmdstan_model(
-  file.path(models_path, "nps_prior_md.stan")# , 
+  file.path(models_path, "nps_prior_md.stan"), 
   cpp_options = list(stan_threads = TRUE)
 )
 
 nps_prior_pp <- cmdstan_model(
-  file.path(models_path, "nps_prior_pp.stan")#, 
+  file.path(models_path, "nps_prior_pp.stan"), 
   cpp_options = list(stan_threads = TRUE)
 )
 
@@ -221,8 +222,6 @@ for (sim in 1:Nsim) {
   Psi_ps_red <- Psi_ps[,1:(ncol(Psi_ps)-1)]
   Psi_nps_red <- Psi_nps[,1:(ncol(Psi_nps)-1)]
 
-  t1 <- Sys.time()
-
   # TODO: benchmark the Stan implementation
   # TODO: figure out why the freeze
 
@@ -230,22 +229,19 @@ for (sim in 1:Nsim) {
     nps_prior_md,
     nps_prior_pp, 
     y_ps, 
-    cbind(X_ps, Psi_ps_red), 
+    X_ps, #cbind(X_ps, Psi_ps_red), 
     y_nps, 
-    cbind(X_nps, Psi_nps_red), 
+    X_nps,#cbind(X_nps, Psi_nps_red), 
     ps_scale_weights, 
     PUMA, 
     PUMA_levels,
     "Pseudolikelihood",
     typeIerr = alpha, 
-    niter = 2000, 
-    warmup = 1000,
+    niter = 500, 
+    warmup = 500,
     chains = 4,
     seed = 99
   )
-
-  elapsed <- Sys.time() - t1
-  print(elapsed)
 
   rake_vars <- c("AGEP_binned", "RAC1P", "SEX")
   pop_margins <- lapply(rake_vars, function(v) {
@@ -268,16 +264,16 @@ for (sim in 1:Nsim) {
     nps_prior_md,
     nps_prior_pp, 
     y_ps, 
-    cbind(X_ps, ps_scale_weights, Psi_ps), 
+    cbind(X_ps, ps_scale_weights), # Psi_ps), 
     y_nps, 
-    cbind(X_nps, nps_rake_weights, Psi_nps), 
+    cbind(X_nps, nps_rake_weights), # Psi_nps), 
     NULL, 
     PUMA, 
     PUMA_levels,
     "Raking",
     typeIerr = alpha, 
-    niter = 2000, 
-    warmup = 1000,
+    niter = 50, 
+    warmup = 50,
     chains = 4,
     seed = 99
   )

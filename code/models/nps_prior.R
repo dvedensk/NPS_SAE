@@ -60,7 +60,7 @@ nps_prior_mcmc <- function(
 ) {
   n <- length(y)
   p <- ncol(X)
-  n_np <- length(y_NP)
+  n_NP <- length(y_NP)
 
   if(is.null(wts)) { # If not using pseudolikelihood
     wts <- rep(1, n)
@@ -118,11 +118,13 @@ nps_prior_mcmc <- function(
     iter_sampling = niter,
     iter_warmup = warmup,
     chains = chains,
+    parallel_chains = chains,
+    threads_per_chain = 1,
     seed = seed,
     refresh = 10
   )
 
-  print(md_fit$summary()[,"rhat"])
+  rhat_md <- md_fit$summary()[,"rhat"]
 
   # Extract posterior draws
   beta_draws <- md_fit$draws("beta", format = "matrix")
@@ -157,11 +159,13 @@ nps_prior_mcmc <- function(
     iter_sampling = niter,
     iter_warmup = warmup,
     chains = chains,
+    parallel_chains = chains,
+    threads_per_chain = 1,
     seed = seed,
     refresh = 10
   )
 
-  print(mdl_fit$summary()[,"rhat"])
+  rhat_mdl <- mdl_fit$summary()[,"rhat"]
 
   # Extract posterior draws
   beta_draws <- mdl_fit$draws("beta", format = "matrix")
@@ -186,11 +190,13 @@ nps_prior_mcmc <- function(
     iter_sampling = niter,
     iter_warmup = warmup,
     chains = chains,
+    parallel_chains = chains,
+    threads_per_chain = 1,
     seed = seed,
     refresh = 10
   )
 
-  print(mdl_ten_fit$summary()[,"rhat"])
+  rhat_mdl_ten <- mdl_ten_fit$summary()[,"rhat"]
 
   # Extract posterior draws
   beta_draws <- mdl_ten_fit$draws("beta", format = "matrix")
@@ -225,11 +231,13 @@ nps_prior_mcmc <- function(
     iter_sampling = niter,
     iter_warmup = warmup,
     chains = chains,
+    parallel_chains = chains,
+    threads_per_chain = 1,
     seed = seed,
     refresh = 10
   )
 
-  print(pp_fit$summary()[,"rhat"])
+  rhat_pp <- pp_fit$summary()[,"rhat"]
 
   # Extract posterior draws
   beta_draws <- pp_fit$draws("beta", format = "matrix")
@@ -249,6 +257,8 @@ nps_prior_mcmc <- function(
     mdl_ten_res,
     pp_res
   )
+
+  save(rhat_md, rhat_mdl, rhat_mdl_ten, rhat_pp, file = paste0("rhat_", raking_or_pl, ".Rdata"))
   
   return(res_df)
 }
