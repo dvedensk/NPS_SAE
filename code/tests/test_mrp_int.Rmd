@@ -1,0 +1,667 @@
+---
+title: "Model Testing for MRP-INT"
+author: "Qianyu Dong"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Load Data
+
+```{r load-libraries}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(cmdstanr)
+library(here)
+```
+
+```{r regenerate-samples}
+# Regenerate test samples with current weights
+# Set working directory to project root temporarily
+old_wd <- getwd()
+setwd(here::here())
+source("code/tests/create_test_sample.R")
+setwd(old_wd)
+
+# Load the generated samples
+load(here::here("data/test_sample.RData"))
+
+# Load and factor population for comparisons (matches main.R)
+acs_pop <- read_csv(here::here("data/ACS_NPS_pop.csv")) %>%
+  mutate(
+    AGEP_binned = factor(AGEP_binned),
+    RAC1P = factor(RAC1P),
+    SEX = factor(SEX),
+    PUMA = factor(PUMA)
+  )
+
+cat("✓ Samples regenerated\n")
+```
+
+# Data Overview
+
+```{r overview}
+data.frame(
+  Sample = c("Population", "PS", "NPS"),
+  N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
+  HICOV_Rate = c(mean(acs_pop$HICOV), mean(ps_df$HICOV), mean(nps_df$HICOV))
+)
+```
+
+
+
+```{r check_weights}
+cat("Weights add up to:", sum(ps_df$weights), "\n")
+cat("Population N: ", nrow(acs_pop))
+```
+
+
+If you'd like to re-scale the weights to add up to the sample size, you may do the following: 
+
+```{r}
+ps_scale_weights <- nrow(ps_df) * ps$weights / sum(ps$weights)
+cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
+```
+
+
+
+
+# Model Specification
+
+
+The idea of this integrated MRP (MRP-INT) is to use the estimated inclusion probabilities as predictors in the regression models. 
+## Inclusion probability following Valliant 2019
+Let $S_i$ be the indicator whether the i is in PS or NPS by
+\[
+  S_i =
+  \begin{cases}
+    1, & \text{if unit $i$ is in the nonprobability sample},\\[3pt]
+    0, & \text{if unit $i$ is in the probability sample}.
+  \end{cases}
+\]
+
+Assign a weight of 1 to each NPS sample and fit a weighted logistic regression to predict the probability of being in the nonprobability sample. Valliant 2019 pointed that a weight adjustment is needed when the NPS size is not negligible to the population. Specifically, adjust the PS weights so that the sum of the NPS weights (i.e.,the NPS sample size) plus the adjusted PS weights equals the original total PS weight.
+
+In more details, let $w_i$ denote the original weight of element $i$ in the
+PS, and let
+\[
+\hat N = \sum_{i \in PS} w_i
+\]
+be the estimated population size from the PS sample, and let $n$
+be the sample size of the NPS. The adjusted weight for
+each PS unit is
+\[
+w_i^{\ast}
+  = w_i \,\frac{\hat N - n}{\hat N}.
+\]
+
+
+
+Let $\mathbf{x}_i$ denote the covariate vector used in the weighted logistic regression model. Here both PS and NPS are used in this regression, and the likelihood is weighted by survey weight.
+
+\begin{align}
+  S_i \mid \mathbf{x}_i &\sim \mathrm{Bernoulli}(\psi_i),\\
+  \mathrm{logit}(\psi_i)
+  &= \gamma_0 + \mathbf{x}_i^\top \boldsymbol{\gamma},
+\end{align}
+
+Then the inclusion probabilities are obtained by
+\[
+  \psi_i
+  = \Pr(S_i = 1 \mid \mathbf{x}_i)
+  = \mathrm{expit}\!\bigl(\gamma_0 + \mathbf{x}_i^\top \boldsymbol{\gamma}\bigr),
+  \qquad \psi_i \in (0,1).
+\]
+
+
+
+We get two sets of estimated inclusion probabilities. The first is continuous $\psi_i$ to use as linear predictor in the outcome model. Then we construct A discrete inclusion categories $\Psi_g, g=1,\cdots G$ by rounding $\psi_i$ to one decimal place, such that observations within the same inclusion probabilities bin are assigned to the same group and share a common intercept. 
+
+
+
+```{r, eval=F}
+ ## 0) LOCK LEVELS FROM TRAINING --------------------------------------------
+  nps_ca <- MR
+  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX   <- factor(nps_ca$SEX)
+  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
+  PUMA_lev     <- levels(factor(nps_ca$PUMA))  
+  J            <- length(PUMA_lev) 
+  
+  ## 1) SELECTION MODEL --------------------------------------------
+  # Build a clean selection dataset with shared covariates
+  sel_MR <- nps_ca[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")]
+  sel_MR$S <- 1L
+  sel_ps <- ps[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "weights")]
+  sel_ps$S <- 0L
+  
+  # Align factor levels to training for selection model too
+  align_levels <- function(df) {
+    df$AGEP  <- factor(df$AGEP_binned,  levels = levels(nps_ca$AGEP_binned))
+    df$SEX   <- factor(df$SEX,   levels = levels(nps_ca$SEX))
+    df$RAC1P <- factor(df$RAC1P, levels = levels(nps_ca$RAC1P))
+    df$PUMA  <- factor(df$PUMA,  levels = PUMA_lev)
+    df
+  }
+  sel_MR <- align_levels(sel_MR)
+  sel_ps <- align_levels(sel_ps)
+  
+  sel_dat <- rbind(
+    cbind(sel_MR, weights = 1),
+    sel_ps
+  )
+  
+  if(adjust==TRUE){
+    ## 1) Estimated population size from PS
+    N_hat <- sum(sel_ps$weights)
+    ## 2) Size of nonprobability sample
+    n_np <- nrow(sel_MR)
+    ## 3) Adjustment factor
+    adj_factor <- (N_hat - n_np) / N_hat
+    ## 4) Adjust PS weights
+    sel_ps$weights <- sel_ps$weights * adj_factor
+    sel_MR$weights=1
+    sel_dat <- rbind(
+      sel_MR[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")],
+      sel_ps[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")]
+    ) 
+  }else{
+    adj_factor=NULL
+  }
+  
+  sel_fit <- stats::glm(
+    S ~ AGEP_binned + SEX + RAC1P, 
+    data = sel_dat,
+    family = binomial(),
+    weights = sel_dat$weights
+  )
+  
+  #bin_val is 0.11, 0.12, etc, psi is the predicted psi, using bin_val represents the random-effect group which is used during poststratification.
+  predict_psi <- function(df) {
+    if (is.null(df) || nrow(df) == 0) return(list(psi = numeric(0), psi_bin = integer(0)))
+    df2 <- align_levels(df)
+    p <- stats::predict(sel_fit, newdata = df2, type = "response")
+    p <- pmin(pmax(p, psi_eps), 1 - psi_eps)#to avoid 0
+    list(psi = as.numeric(p), bin_val = bin_fun(p))
+  }
+  
+  psi_train <- predict_psi(nps_ca)
+  psi_ps    <- predict_psi(ps)
+  psi_pop   <- predict_psi(acs_pop)
+  
+  # Build a consistent bin map across ALL datasets
+  all_bin_vals <- unique(c(psi_train$bin_val, psi_ps$bin_val, psi_pop$bin_val))
+  all_bin_vals <- sort(unique(all_bin_vals))
+  G <- length(all_bin_vals)
+  
+  
+  bin_map <- setNames(seq_along(all_bin_vals), all_bin_vals)
+  map_bins <- function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+
+  
+  psi_bin_train <- map_bins(psi_train$bin_val)
+  psi_bin_ps    <- map_bins(psi_ps$bin_val)
+  psi_bin_pop   <- map_bins(psi_pop$bin_val)
+
+```
+
+
+
+```{r, eval=F}
+  #bin_val is 0.11, 0.12, etc, psi is the predicted psi, using bin_val represents the random-effect group which is used during poststratification.
+  bin_fun <- function(p) round(p, 1)  #round(p, 1)  may end up only has two groups if inclusion probs are small
+  predict_psi <- function(df) {
+    if (is.null(df) || nrow(df) == 0) return(list(psi = numeric(0), psi_bin = integer(0)))
+    df2 <- align_levels(df)
+    p <- stats::predict(sel_fit, newdata = df2, type = "response")
+    p <- pmin(pmax(p, psi_eps), 1 - psi_eps)#to avoid 0
+    list(psi = as.numeric(p), bin_val = bin_fun(p))
+  }
+  
+  psi_train <- predict_psi(nps_ca)
+  psi_ps    <- predict_psi(ps)
+  psi_pop   <- predict_psi(acs_pop)
+  
+  # Build a consistent bin map across ALL datasets
+  all_bin_vals <- unique(c(psi_train$bin_val, psi_ps$bin_val, psi_pop$bin_val))
+  all_bin_vals <- sort(unique(all_bin_vals))
+  bin_map <- setNames(seq_along(all_bin_vals), all_bin_vals)
+  map_bins <- function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
+  
+  psi_bin_train <- map_bins(psi_train$bin_val)
+  psi_bin_ps    <- map_bins(psi_ps$bin_val)
+  psi_bin_pop   <- map_bins(psi_pop$bin_val)
+  G <- length(all_bin_vals)
+```
+
+
+
+## Multilevel regression
+
+
+Let $Y_i$ be the binary outcome of insurance
+coverage for unit $i$ in the nonprobability sample. Let $\mathbf{x}_i$ denote
+the covariates, and let
+$\psi_i$ and $\Psi_g$ be the continuous inclusion probability and its
+discretized category as defined above. The MRP-INT outcome model is
+\begin{align}
+  Y_i \mid \mathbf{x}_i, \psi_i, \Psi_i
+  &\sim \mathrm{Bernoulli}(p_i),\\
+  \mathrm{logit}(p_i)
+  &= \mathbf{x}_i^\top \boldsymbol{\beta} + \beta_\psi \,\mathrm{logit}(\psi_i) +\Psi_{g[i]}  + \alpha_{m[i]},\\
+  \boldsymbol{\beta} &\sim \text{Normal}(0, \boldsymbol{\sigma_{\beta}}),\\
+  \beta_{\psi} &\sim \text{Normal}(0, \sigma_{\psi}),\\
+   \alpha_m &\sim \text{Normal}(0, \sigma_{m})\qquad m = 1,\cdots, M = 281, \\
+\Psi_g \mid \sigma_\psi &\sim \text{Normal}(0,\sigma_\psi^2) \qquad g = 1,\dots,G,\\
+  \sigma_\psi &\sim \mathrm{Exponential}(\lambda),\\
+    \sigma_m &\sim \text{t}(\nu=3, s=2.5).
+\end{align}
+Here $\boldsymbol{\beta}$ are fixed-effect coefficients for the covariates
+$\mathbf{x}_i$, $\beta_\psi$ is the coefficient on the continuous inclusion
+term $\mathrm{logit}(\psi_i)$, and $\Psi_g$ is a random intercept
+associated with the inclusion bin g. The inclusion bin random effects follow a Normal distribution with the standard deviation assigned a Exponential prio, where $\lambda$ is a rate parameter from data such that $\lambda = 1 / \widehat{\sigma}_Y$. Moderately informative priors are used for covariates, in which $\sigma_{\beta} = sd(Y)/sd(X)$ <span style="Si (2023) suggested 2.5*sd(Y)/sd(X), but it caused stan warning of -inf intercepts, so I used sd(Y)/sd(X).</i></span>. Finally, $\alpha_{m[i]}$ denotes denotes the random intercept for the m-th PUMA that unit i resides in, $\sigma_m$ follows half t distribution.
+
+
+<span style="color: blue;"><i>J was used for PUMA and c was used for cells in the code. I changed the notation in the notes to use m for PUMA and j for cells, since Si (2023) uses j for cells and does not use areal level notation.</i></span>
+
+
+
+
+```{r,eval=FALSE}
+
+functions {
+  real bern_ll_slice(array[] int y_slice, int start, int end,
+                     matrix X,
+                     array[] int psi_bin,
+                     vector lp_psi,
+                     vector beta,
+                     real beta_psi,
+                     vector zeta,
+                     array[] int puma_id,
+                     vector a_puma) {
+    int M = end - start + 1;
+    vector[M] alpha_slice =
+        beta_psi * lp_psi[start:end]
+      + zeta[psi_bin[start:end]]
+      + a_puma[puma_id[start:end]];
+
+    return bernoulli_logit_glm_lpmf(y_slice | X[start:end, ], alpha_slice, beta);
+ 
+  }
+}
+
+data {
+  // --- Training data 
+  int<lower=1> n;
+  int<lower=1> k;
+  matrix[n, k] X;
+  array[n] int<lower=0, upper=1> y;
+  int<lower=1> J;
+  array[n] int<lower=1, upper=J> puma_id;
+  int<lower=1> G;    
+  vector[n] lp_psi; 
+  // number of psi bins
+  array[n] int<lower=1, upper=G> psi_bin;   // bin index for each training unit
+  // reduce_sum grainsize
+  int<lower=1> grainsize;
+  // ---prior
+  vector[k] beta_scale;      // Vector of scales for beta
+  real beta_psi_scale;       // Scale for beta_psi
+  real sigma_psi_rate;       // Rate for sigma_psi
+  
+}
+
+
+parameters {
+  vector[k] beta;
+  real beta_psi;                
+real<lower=0, upper=5> sigma_psi;
+  vector[G]     zeta_raw;
+  real<lower=0> sigma_puma;
+vector[J] z_puma;
+
+}
+
+transformed parameters {
+  vector[G] zeta = sigma_psi * zeta_raw;    
+  vector[J] a_puma = sigma_puma * z_puma;
+}
+
+model {
+  beta      ~ normal(0, beta_scale);
+  beta_psi  ~ normal(0, beta_psi_scale);
+  sigma_psi ~ exponential(sigma_psi_rate);
+  zeta_raw  ~ normal(0, 1);
+  z_puma     ~ normal(0, 1);
+  sigma_puma ~student_t(3,0,2.5);  
+  target += reduce_sum(bern_ll_slice, y, grainsize,
+                       X, psi_bin, lp_psi, beta, beta_psi, zeta,
+                       puma_id, a_puma);
+                       
+}
+
+
+
+
+```
+
+
+
+## Poststratification 
+
+For posterior samples, let
+$\boldsymbol{\beta}^{(s)}$, $\beta_\psi^{(s)}$, $\Psi_g^{(s)}$, and $\alpha_m^{(s)}$
+denote the s-th posterior draw of $\boldsymbol{\beta}$, $\beta_\psi$, $\Psi_g$,
+and $\alpha_m$, for $s = 1,\dots,S$.
+
+Following Si (2023), we assume the population counts are known and construct
+poststratification cells using population data.  Let $j = 1,\dots,J$ index
+population cells defined by combinations of covariates. For each cell $j$,
+define:
+
+
+- $x_j$ is the cell-level covariate vector.
+- $\psi_j$ is the inclusion probability obtained by applying the selection model to the cell-level covariate vector.
+- $\Psi_g = b(\psi_j)$ is the corresponding inclusion bin results.
+- $m[j] \in \{1,\dots,M\}$ is the PUMA index associated with cell $j$.
+- $w_j$ is the cell weight by summing each individual weight. Individual weight is 1 in population data.
+
+
+
+For each posterior draw $s$, the cell-level linear predictor and probability
+are
+\begin{align}
+  \eta_j^{(s)}
+  &= \mathbf{x}_c^\top \boldsymbol{\beta}^{(s)} + \beta_\psi^{(s)} \,\mathrm{logit}(\psi_j)+ \Psi_{g[j]}^{(s)}+ \alpha_{m[j]}^{(s)},\\
+ p_j^{(s)} &= \mathrm{expit }\!\bigl(\eta_j^{(s)}\bigr).
+\end{align}
+
+
+The PUMA-level estimate for area \( m \) is then
+\[
+\theta_{m}^{(s)} 
+=
+\frac{
+\sum\limits_{j:\, m[j]=m} w_j \,  p_j^{(s)}
+}{
+\sum\limits_{j:\, m[j]=m} w_j
+}.
+\]
+
+```{r,eval=FALSE}
+
+
+
+# ---------- 1) individuals to cells ----------
+
+collapse_to_cells_int <- function(df, train_ref, PUMA_lev,
+                                  psi_vec,
+                                  psi_bin_vec,
+                                  design_formula = ~ 0 + AGEP_binned + SEX + RAC1P,
+                                  weight_col = NULL,
+                                  bin_map = bin_map,
+                                  map_bins = function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])) {
+  
+  df <- .align_to_train(df, train_ref, PUMA_lev)
+  
+  w <- if (!is.null(weight_col) && weight_col %in% names(df)) df[[weight_col]] else 1
+  w <- as.numeric(w); w[!is.finite(w) | w < 0] <- 0
+  
+  if (length(psi_vec) != nrow(df) || length(psi_bin_vec) != nrow(df)) {
+    stop("psi_vec and psi_bin_vec must have length nrow(df)")
+  }
+  df$psi     <- as.numeric(psi_vec)
+  df$psi_bin <- as.integer(psi_bin_vec)
+  
+  # critical: PUMA levels locked
+  df$PUMA <- factor(df$PUMA, levels = PUMA_lev)
+  
+  cells <- df |>
+    dplyr::mutate(W = w) |>
+    dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) |>
+    dplyr::summarise(
+      w   = sum(W),
+      psi = mean(psi),
+      .groups = "drop"
+    )
+  
+  cells$PUMA <- factor(cells$PUMA, levels = PUMA_lev)
+  
+  # recompute bins from cell-mean psi (your logic)
+  cells$psi_bin <- map_bins(bin_fun(cells$psi))
+  
+  Xp <- model.matrix(design_formula, data = cells)
+  g  <- as.integer(cells$PUMA)
+  if (anyNA(g)) stop("Some cells have PUMA not in PUMA_lev -> NA group id.")
+  
+  list(Xp = Xp, g = g, w = cells$w, psi = cells$psi, psi_bin = cells$psi_bin, cells = cells)
+}
+
+# ---------- 2) Extract CmdStanR draws ----------
+get_params_int_draws <- function(fit) {
+  beta_mat <- fit$draws("beta", format = "matrix")  # beta: S x K
+  beta_psi_mat <- fit$draws("beta_psi", format = "matrix")  # beta_psi: S-length vector
+  beta_psi_vec <- as.numeric(beta_psi_mat[, 1])
+  zeta_mat <- fit$draws("zeta", format = "matrix")    # zeta: S x G   
+  
+  list(
+    beta     = beta_mat,
+    beta_psi = beta_psi_vec,
+    zeta     = zeta_mat
+  )
+}
+
+# ---------- 3) poststrat by cell ----------
+poststrat_int_SxJ <- function(beta, beta_psi, zeta, a_puma,
+                              Xp, g, psi, psi_bin, w = NULL, J = max(g)) {
+  N <- nrow(Xp)
+  S <- nrow(beta)
+  
+  if (is.null(w)) w <- rep(1, N) else w <- as.numeric(w)
+  w[!is.finite(w) | w < 0] <- 0
+  
+  lp <- qlogis(pmin(pmax(psi, 1e-6), 1 - 1e-6))  # N
+  
+  # N x S components
+  eta <- Xp %*% t(beta)                                  # fixed
+  eta <- eta + tcrossprod(lp, beta_psi)                  # selection slope
+  eta <- eta + t(zeta[, psi_bin, drop = FALSE])          # psi-bin 
+  eta <- eta + t(a_puma[, g, drop = FALSE])              # PUMA
+  
+  p <- plogis(eta)  # N x S
+  
+  idx_by_j <- split(seq_len(N), factor(g, levels = seq_len(J)))
+  mu <- matrix(NA_real_, nrow = S, ncol = J)
+  
+  for (j in seq_len(J)) {
+    idx <- idx_by_j[[j]]
+    if (length(idx) == 0) next
+    sw <- sum(w[idx])
+    wj <- if (sw > 0) w[idx] / sw else rep(0, length(idx))
+    mu[, j] <- as.numeric(crossprod(wj, p[idx, , drop = FALSE]))
+  }
+  mu
+}
+
+
+
+```
+
+# Fit Model
+
+```{r compile-model}
+mod <- cmdstan_model(
+  here("code/models", "mrp_int2.stan"),
+  cpp_options = list(stan_threads = TRUE))
+source(here("code/models","mrp_all.R"))
+```
+
+```{r fit-model, cache=TRUE}
+# start_time <- Sys.time()
+# fit <- [your fitting function]
+# cat("Fitted in", round(Sys.time() - start_time, 2), "seconds\n")
+
+
+start_time <- Sys.time()
+
+ ps_df <- acs_pop[ps$idx, ] %>%
+    mutate(weights = ps$weights)
+
+# IMPORTANT: Bootstrap is essential for MRP-INT-R to achieve proper coverage.
+# Without bootstrap (bootstrap=FALSE), MRP-INT-R only captures posterior uncertainty
+# from the Bayesian model parameters, resulting in ~52% coverage instead of the
+# expected ~95%. With bootstrap (bootstrap=TRUE, L=100), we properly capture both
+# posterior uncertainty AND sampling uncertainty from the finite probability sample,
+# achieving ~93% coverage.
+tryCatch(
+  {
+  mrpint <- getMRP_INT(
+      MR = nps_df,
+      ps = ps_df,
+      acs_pop = acs_pop,
+      mod = mod,
+      adjust=T,
+      bootstrap=TRUE,  # Essential for proper uncertainty quantification
+      L=100            # Number of bootstrap replicates (recommended: 100)
+      )
+
+    mrp_time <- Sys.time() - start_time
+    cat("✅ getMRP_INT completed in", round(mrp_time, 2), attr(mrp_time, "units"), "\n")
+
+    # Post Stratification results (MRP-R, MRP-P & MRP-R-bootstrap)
+    rhat<-mrpint$rhat
+    mrpra <- mrpint$puma_summary_mrpr
+    mrppb <- mrpint$puma_summary_mrpp
+    mrppc <- mrpint$puma_summary_mrpr_bootstrap
+    cat("- MRP-INT-R results:", nrow(mrpra), "PUMAs\n")
+    cat("- MRP-INT-P results:", nrow(mrppb), "PUMAs\n")
+    cat("- MRP-INT-R-bootstrap results:", nrow(mrppc), "PUMAs\n")
+  },
+  error = function(e) {
+    cat("❌ getMRP failed:", e$message, "\n")
+  }
+)
+
+
+```
+
+# Results
+
+```{r diagnostics}
+range(mrpint$rhat)
+```
+
+```{r extract-estimates}
+# Extract your model's PUMA-level estimates
+# Create a data frame with columns: PUMA, point_est, lower_CI, upper_CI, model
+# Example:
+# your_model_results <- data.frame(
+#   PUMA = ...,
+#   point_est = ...,
+#   lower_CI = ...,
+#   upper_CI = ...,
+#   model = "your_model_name"
+# )
+```
+
+# Performance Comparison
+
+## Calculate True Values and Direct Estimates
+
+```{r true-values}
+library(survey)
+
+# Calculate true population values by PUMA (what we're trying to estimate)
+response_var <- "PUBCOV"  # or whatever response variable you're using
+alpha <- 0.05
+
+true_values <- acs_pop %>%
+  group_by(PUMA) %>%
+  summarize(
+    response_true = mean(.data[[response_var]], na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r direct-estimates}
+# Add weights to PS sample (from test_sample.RData, ps contains weights)
+ps_df <- ps_df %>%
+  mutate(weights = ps$weights)
+
+# Create survey design
+samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps_df)
+
+# Calculate direct estimates by PUMA with standard errors
+direst <- svyby(
+  as.formula(paste0("~", response_var)),
+  ~PUMA,
+  samp.design,
+  svymean,
+  na.rm = TRUE,
+  vartype = "se",
+  keep.names = FALSE
+) %>%
+  arrange(PUMA) %>%
+  transmute(
+    PUMA,
+    point_est = .data[[response_var]],
+    lower_CI = point_est + qnorm(alpha / 2) * se,
+    upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+    model = "direst"
+  )
+```
+
+## Calculate Performance Metrics
+
+```{r performance-metrics}
+# Helper function for interval score (from main.R)
+int_score <- function(alpha, y, lower, upper) {
+  (upper - lower) +
+    (2 / alpha) * (lower - y) * (y < lower) +
+    (2 / alpha) * (y - upper) * (y > upper)
+}
+
+# Combine your model results with direct estimates
+all_results <- bind_rows(direst, mrppb, mrppc)
+
+# Calculate performance metrics for all models
+performance_metrics <- true_values %>%
+  left_join(all_results, by = "PUMA") %>%  # Replace 'direst' with 'all_results' when you have your model
+  group_by(model) %>%
+  summarize(
+    MSE = mean((response_true - point_est)^2),
+    MAB = mean(abs(response_true - point_est)),
+    Coverage = mean(between(response_true, lower_CI, upper_CI)),
+    `Int. Score` = mean(int_score(alpha, response_true, lower_CI, upper_CI)),
+    .groups = "drop"
+  )
+
+performance_metrics
+```
+
+## Visualize Estimates vs Truth
+
+```{r visualize}
+# Plot estimates vs truth for direct estimates (and your model)
+ggplot(true_values %>% left_join(all_results, by = "PUMA"),
+       aes(x = response_true, y = point_est)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), alpha = 0.3) +
+  facet_wrap(~model)+
+  labs(
+    title = "Direct Estimates vs True PUMA Values",
+    x = "True HICOV Rate",
+    y = "Estimated HICOV Rate"
+  ) +
+  theme_minimal()
+
+# After fitting your model, add facet_wrap(~model) to compare multiple methods
+```

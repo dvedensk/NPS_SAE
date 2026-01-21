@@ -20,23 +20,21 @@ library(dplyr)
 library(ggplot2)
 library(cmdstanr)
 library(here)
-library(survey)
 ```
 
 ```{r regenerate-samples}
-# FIXME: setwd seems unnecessary here; wd should always be project root
 # Regenerate test samples with current weights
 # Set working directory to project root temporarily
 old_wd <- getwd()
 setwd(here::here())
-source(here::here("code", "tests", "create_test_sample.R"))
+source("code/tests/create_test_sample.R")
 setwd(old_wd)
 
 # Load the generated samples
-load(here::here("data", "test_sample.RData"), verbose = TRUE)
+load(here::here("data/test_sample.RData"))
 
 # Load and factor population for comparisons (matches main.R)
-acs_pop <- read_csv(here::here("data", "ACS_NPS_pop.csv")) %>%
+acs_pop <- read_csv(here::here("data/ACS_NPS_pop.csv")) %>%
   mutate(
     AGEP_binned = factor(AGEP_binned),
     RAC1P = factor(RAC1P),
@@ -50,18 +48,14 @@ cat("✓ Samples regenerated\n")
 # Data Overview
 
 ```{r overview}
-
-# EDIT: pulled this from IPW_test.Rmd. Without these lines, the weights column was never initialized.
-ps_df <- rename(ps_df, weights=PWGTP)
-nps_df <- rename(nps_df, weights=PWGTP)
-ps_df$weights <-  nrow(acs_pop) * ps_df$weights / sum(ps_df$weights)
-
 data.frame(
   Sample = c("Population", "PS", "NPS"),
   N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
   PUBCOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
 )
 ```
+
+
 
 ```{r check_weights}
 cat("Weights add up to:", sum(ps_df$weights), "\n")
@@ -149,12 +143,9 @@ true_values <- acs_pop %>%
 ```
 
 ```{r direct-estimates}
-#####
-# FIXME: This is already done in lines 54-56, so we can remove it from here.
 # Add weights to PS sample (from test_sample.RData, ps contains weights)
-# ps_df <- ps_df %>%
-#   mutate(weights = ps$weights)
-#####
+ps_df <- ps_df %>%
+  mutate(weights = ps$weights)
 
 # Create survey design
 samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps_df)
