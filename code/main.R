@@ -5,6 +5,7 @@ library(survey)
 library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
+library(matrixStats)
 if (!requireNamespace("cmdstanr", quietly = TRUE)) {
   stop("cmdstanr is required; install it via install.packages('cmdstanr').")
 }
@@ -39,8 +40,13 @@ stan_bulm_mod <- cmdstan_model(
   cpp_options = list(stan_threads = TRUE)
 )
 
-nps_prior_mod <- cmdstan_model(
-  file.path("code", "models", "nps_prior_logistic.stan"),
+nps_prior_md_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_md.stan"),
+  cpp_options = list(stan_threads = TRUE)
+)
+
+nps_prior_pp_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_pp.stan"),
   cpp_options = list(stan_threads = TRUE)
 )
 
@@ -59,6 +65,11 @@ PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 # NPS sampling weight configuration (for PUBCOV: use PWGTP=0.3, AGEP=0.7)
 # IMPORTANT: Increasing the weight on AGEP will uniformly increase DDC for PUBCOV
 NPS_weight_config <- list(PWGTP = 0.3, AGEP = 0.7)
+
+# NPS prior configuration
+# Choose from: "pp", "md", "mdl", "mdl10"
+nps_prior_which <- c("pp")
+scale_nps_prior_weight_covariate <- TRUE
 
 # Other simulation parameters
 Nsim <- 1
@@ -316,91 +327,91 @@ for (sim in 1:Nsim) {
   colnames(VSW_out) <- colnames(direst)
 
   # ============================================================
-  # METHOD 6: NPS PRIOR METHOD (POWER PRIOR)
+  # METHOD 6: NPS PRIOR METHODS (MD/PP)
   # ============================================================
-  # Adaptive power prior: uses Hotelling T^2 test to compare PS/NPS coefficient estimates
-  # Returns p-value as power parameter `a`:
-  #   - a ≈ 1.0: Strong PS-NPS agreement → NPS gets high weight
-  #   - a ≈ 0.5: Moderate agreement → NPS gets moderate weight
-  #   - a ≈ 0.0: Poor agreement → NPS downweighted (high bias suspected)
-  # Following Salvatore et al. (2024) approach
-  adaptive_result <- calculate_adaptive_power_prior_a(
-    y_ps = y_ps,
-    X_ps = X_ps,
-    y_nps = y_nps,
-    X_nps = X_nps,
-    verbose = TRUE
-  )
+  domain_levels <- sort(unique(c(as.character(ps$PUMA), as.character(nps$PUMA))))
+  domain_ps <- match(ps$PUMA, domain_levels)
+  domain_nps <- match(nps$PUMA, domain_levels)
+  PUMA_levels <- domain_levels
 
-  power_prior_a_used <- adaptive_result$a
+  power_prior_a <- NULL
+  if ("pp" %in% nps_prior_which) {
+    power_prior_a <- calculate_adaptive_power_prior_a(
+      y_ps = y_ps,
+      X_ps = X_ps,
+      y_nps = y_nps,
+      X_nps = X_nps,
+      verbose = TRUE
+    )$a
+  }
 
-  # Prepare Stan data
-  nps_prior_data <- list(
-    n = length(y_ps),
-    n_np = length(y_nps),
-    p = ncol(X_ps),
-    X = X_ps,
-    X_np = X_nps,
+  nps_prior_pl_res <- nps_prior_mcmc(
+    md_mod = nps_prior_md_mod,
+    pp_mod = nps_prior_pp_mod,
     y = y_ps,
-    y_np = y_nps,
-    w = ps_scale_weights,
-    a = power_prior_a_used
-  )
-
-  # Sample from Stan model
-  nps_prior_fit <- nps_prior_mod$sample(
-    data = nps_prior_data,
+    X = X_ps,
+    y_NP = y_nps,
+    X_NP = X_nps,
+    wts = ps_scale_weights,
+    PUMA = factor(ps$PUMA, levels = domain_levels),
+    PUMA_levels = PUMA_levels,
+    raking_or_pl = "Pseudolikelihood",
+    typeIerr = alpha,
+    niter = mcmc_iter,
+    warmup = mcmc_burn,
     chains = n_chains,
-    parallel_chains = n_chains,
-    iter_warmup = mcmc_burn,
-    iter_sampling = mcmc_iter,
+    seed = curr_seed,
+    which_prior = nps_prior_which,
+    a = power_prior_a,
+    domain_ps = domain_ps,
+    domain_nps = domain_nps,
+    domain_levels = domain_levels,
     threads_per_chain = 4,
-    refresh = 0, # Suppress progress messages
-    seed = curr_seed
+    parallel_chains = n_chains
   )
 
-  # Extract posterior draws of beta
-  beta_draws <- posterior::as_draws_matrix(nps_prior_fit$draws("beta"))
-
-  # Predict on population cells and aggregate by PUMA
-  X_pop <- model.matrix(X_formula, data = acs_pop_grouped)
-  n_cells <- nrow(X_pop)
-  n_draws <- nrow(beta_draws)
-
-  # Compute probabilities for each cell and draw
-  logits <- X_pop %*% t(beta_draws)
-  probs <- plogis(logits)
-
-  # Generate predictions (binomial draws for each cell)
-  preds <- matrix(
-    rbinom(n_cells * n_draws, size = acs_pop_grouped$n, prob = c(probs)),
-    nrow = n_cells, ncol = n_draws
+  # Raked weights for weight-as-covariate prior
+  rake_vars <- c("AGEP_binned", "RAC1P", "SEX")
+  pop_margins <- lapply(rake_vars, function(v) {
+    as.data.frame(table(acs_pop[[v]])) %>%
+      rename(!!v := Var1, Freq = Freq)
+  })
+  nps_design <- svydesign(ids = ~1, data = nps, weights = ~1)
+  rake_formulas <- lapply(rake_vars, function(v) as.formula(paste0("~", v)))
+  nps_raked_design <- rake(
+    design = nps_design,
+    sample.margins = rake_formulas,
+    population.margins = pop_margins
   )
+  nps_rake_weights <- weights(nps_raked_design)
+  nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
 
-  # Aggregate by PUMA
-  cell_preds_df <- data.frame(
-    PUMA = acs_pop_grouped$PUMA,
-    n = acs_pop_grouped$n,
-    preds = I(asplit(preds, 1))
+  nps_prior_rak_res <- nps_prior_mcmc(
+    md_mod = nps_prior_md_mod,
+    pp_mod = nps_prior_pp_mod,
+    y = y_ps,
+    X = X_ps,
+    y_NP = y_nps,
+    X_NP = X_nps,
+    wts = NULL,
+    PUMA = factor(ps$PUMA, levels = domain_levels),
+    PUMA_levels = PUMA_levels,
+    raking_or_pl = "Raking",
+    typeIerr = alpha,
+    niter = mcmc_iter,
+    warmup = mcmc_burn,
+    chains = n_chains,
+    seed = curr_seed,
+    which_prior = nps_prior_which,
+    a = power_prior_a,
+    domain_ps = domain_ps,
+    domain_nps = domain_nps,
+    domain_levels = domain_levels,
+    weight_covariate = list(ps = ps_scale_weights, nps = nps_rake_weights),
+    scale_weight_covariate = scale_nps_prior_weight_covariate,
+    threads_per_chain = 4,
+    parallel_chains = n_chains
   )
-
-  puma_preds <- cell_preds_df %>%
-    group_by(PUMA) %>%
-    summarize(
-      n_total = sum(n),
-      pred_sums = list(colSums(do.call(rbind, preds))),
-      .groups = "drop"
-    ) %>%
-    mutate(pred_probs = map2(pred_sums, n_total, ~ .x / .y)) %>%
-    mutate(
-      point_est = map_dbl(pred_probs, mean),
-      lower_CI = map_dbl(pred_probs, ~ quantile(.x, alpha / 2)),
-      upper_CI = map_dbl(pred_probs, ~ quantile(.x, 1 - alpha / 2))
-    ) %>%
-    select(PUMA, point_est, lower_CI, upper_CI) %>%
-    mutate(model = "NPS Prior (Power)")
-
-  nps_prior_out <- puma_preds
 
   # ============================================================
   # COMBINE ALL RESULTS
@@ -417,7 +428,8 @@ for (sim in 1:Nsim) {
     mrpint_r, # METHOD 4.2
     mrpint_p, # METHOD 4.2
     VSW_out, # METHOD 5
-    nps_prior_out # METHOD 6
+    nps_prior_pl_res, # METHOD 6a
+    nps_prior_rak_res # METHOD 6b
   )
 }
 
