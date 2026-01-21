@@ -238,8 +238,8 @@ for (sim in 1:Nsim) {
   }
 
   # TODO: benchmark the Stan implementation
-  # TODO: figure out why the freeze
-
+  # Look at ESS, Rhat, Time per iteration, total time, 
+  # peakRAM, and comparison with direst for pl & raking.
   nps_prior_pl_res <- nps_prior_mcmc(
     nps_prior_md,
     nps_prior_pp, 
