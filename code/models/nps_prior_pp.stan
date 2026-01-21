@@ -6,8 +6,8 @@ data {
   matrix[n, p] X;                 // PS design matrix
   matrix[n_np, p] X_np;           // NPS design matrix
 
-  array[n] int<lower=0, upper=1> y;        // PS outcomes
-  array[n_np] int<lower=0, upper=1> y_np;  // NPS outcomes
+  vector<lower=0, upper=1>[n] y;        // PS outcomes
+  vector<lower=0, upper=1>[n_np] y_np;   // NPS outcomes
 
   vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
   real<lower=0, upper=1> a;       // power prior exponent
@@ -21,13 +21,11 @@ model {
   // Prior: t_3(0, 2.5)
   beta ~ student_t(3, 0, 2.5);
 
-  // PS pseudolikelihood
-  for (i in 1:n) {
-    target += w[i] * bernoulli_logit_lpmf(y[i] | X[i] * beta);
-  }
+  // PS pseudolikelihood (vectorized)
+  vector[n] eta = X * beta; // linear predictor
+  target += dot_product(w, y .* eta - log1p_exp(eta));
 
-  // NPS likelihood (power prior)
-  for (l in 1:n_np) {
-    target += a * bernoulli_logit_lpmf(y_np[l] | X_np[l] * beta);
-  }
+  // NPS likelihood (power prior) (vectorized)
+  vector[n_np] eta_np = X_np * beta;
+  target += a * (y_np .* eta_np - log1p_exp(eta_np));
 }

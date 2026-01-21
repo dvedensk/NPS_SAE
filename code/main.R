@@ -17,19 +17,7 @@ source(file.path("code", "sampling_functions.R"))
 source(file.path("code", "utils.R"))
 source(file.path(models_path, "bulm.R"))
 source(file.path(models_path, "VSW.R"))
-
-# Render the Rmd file in the global environment 
-# (effectively sources the R code chunks)
-render(
-  file.path(models_path, "nps_prior_logistic.Rmd"), 
-  output_format = "pdf_document", 
-  output_file = "nps_prior_logistic.pdf",
-  output_dir = models_path,
-  envir = globalenv(), 
-  quiet = TRUE
-) %>% 
-  suppressWarnings() # Don't throw deprecation warnings
-
+source(file.path(models_path, "nps_prior.R"))
 source(file.path(models_path, "mrp_all.R"))
 # load .stan
 mod <- cmdstan_model(
@@ -42,7 +30,17 @@ modINT <- cmdstan_model(
   cpp_options = list(stan_threads = TRUE)
 )
 
-Sys.setenv(STAN_NUM_THREADS = availableCores() - 1) # number of threads should always be, at most, one fewer than the number of available cores (leave one for system processes.) 
+nps_prior_md <- cmdstan_model(
+  file.path(models_path, "nps_prior_md.stan")# , 
+  cpp_options = list(stan_threads = TRUE)
+)
+
+nps_prior_pp <- cmdstan_model(
+  file.path(models_path, "nps_prior_pp.stan")#, 
+  cpp_options = list(stan_threads = TRUE)
+)
+
+Sys.setenv(STAN_NUM_THREADS = max(1, availableCores() - 1)) # number of threads should always be, at most, one fewer than the number of available cores (leave one for system processes.) 
 # Also, parallelly::availableCores() - 1 is safer (for example, on HPC) because it also fulfills SLURM constraints. 
 # If we do this on HPC, we can safely use availableCores() instead of availableCores() - 1.
 
@@ -177,8 +175,6 @@ for (sim in 1:Nsim) {
     ) %>%
     select(PUMA, point_est, lower_CI, upper_CI, model)
 
-
-
   # 6. Fit unit-level model on probability sample
 
   bulm_out <- bulm_results(
@@ -220,24 +216,72 @@ for (sim in 1:Nsim) {
 
   # 10. Fit NPS-informed prior model (Ethan)
 
-  # TODO: use survey::rake to make the survey weight covariate
-  # TODO: check mixing; try other PG sampler packages
-  # TODO: test whether the Stan implementation works
-  # TODO: output two sets of results: once with a pseudolikelihood and once with the raking covariate
-  #        (for this, need to add a model prefix argument (for final model names like "NPS Prior w/ Raking: Power Prior" and "NPS Prior w/ Pseudolikelihood: Power Prior"))
+  # The NPS prior method involves an MLE, so 
+  # we need to remove one PUMA indicator to avoid multicollinearity
+  Psi_ps_red <- Psi_ps[,1:(ncol(Psi_ps)-1)]
+  Psi_nps_red <- Psi_nps[,1:(ncol(Psi_nps)-1)]
 
-  nps_prior_res <- nps_prior_mcmc(
+  t1 <- Sys.time()
+
+  # TODO: benchmark the Stan implementation
+  # TODO: figure out why the freeze
+
+  nps_prior_pl_res <- nps_prior_mcmc(
+    nps_prior_md,
+    nps_prior_pp, 
     y_ps, 
-    cbind(X_ps, Psi_ps), 
+    cbind(X_ps, Psi_ps_red), 
     y_nps, 
-    cbind(X_nps, Psi_nps), 
-    niter = 4000, 
-    PUMA = PUMA,
-    PUMA_levels = PUMA_levels,
-    wts = ps_scale_weights, 
-    typeIerr = alpha
+    cbind(X_nps, Psi_nps_red), 
+    ps_scale_weights, 
+    PUMA, 
+    PUMA_levels,
+    "Pseudolikelihood",
+    typeIerr = alpha, 
+    niter = 2000, 
+    warmup = 1000,
+    chains = 4,
+    seed = 99
   )
-  
+
+  elapsed <- Sys.time() - t1
+  print(elapsed)
+
+  rake_vars <- c("AGEP_binned", "RAC1P", "SEX")
+  pop_margins <- lapply(rake_vars, function(v) {
+    as.data.frame(table(acs_pop[[v]])) %>%
+      rename(!!v := Var1, Freq = Freq)
+  })
+
+  nps_design <- svydesign(ids = ~1, data = nps, weights = ~1)
+  rake_formulas <- lapply(rake_vars, function(v) as.formula(paste0("~", v)))
+  nps_raked_design <- rake(
+    design = nps_design,
+    sample.margins = rake_formulas,
+    population.margins = pop_margins
+  )
+
+  nps_rake_weights <- weights(nps_raked_design)
+  nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
+
+  nps_prior_rak_res <- nps_prior_mcmc(
+    nps_prior_md,
+    nps_prior_pp, 
+    y_ps, 
+    cbind(X_ps, ps_scale_weights, Psi_ps), 
+    y_nps, 
+    cbind(X_nps, nps_rake_weights, Psi_nps), 
+    NULL, 
+    PUMA, 
+    PUMA_levels,
+    "Raking",
+    typeIerr = alpha, 
+    niter = 2000, 
+    warmup = 1000,
+    chains = 4,
+    seed = 99
+  )
+
   # 11. Fit MRP (Qianyu)
   mrp=getMRP(MR=nps,
              ps=ps,
@@ -282,7 +326,8 @@ for (sim in 1:Nsim) {
     result_VSW,
     mrpr,
     mrprp,
-    nps_prior_res
+    nps_prior_pl_res,
+    nps_prior_rak_res
   )
 }
 

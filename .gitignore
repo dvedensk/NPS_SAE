@@ -5,3 +5,6 @@ code/tests/nps_prior_test.R
 code/tests/nps_prior_logtest.R
 code/models/si2
 code/models/mrp_int2
+code/models/nps_prior_md
+code/models/nps_prior_pp
+todo.md

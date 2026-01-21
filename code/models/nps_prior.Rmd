@@ -1,0 +1,207 @@
+---
+title: 'NPS Prior Logistic Regression: Methods and MCMC Implementation'
+author: "Ethan Pawl"
+date: "November 2025"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Overview
+
+This R Markdown file describes the NPS prior approach to logistic regression specified in Salvatore et al. (2024), 
+including the four priors
+
+1. Mixed-Distance  
+2. Mixed-Distance-log  
+3. Mixed-Distance-log10  
+4. Power Prior
+
+We present the model setup, prior definitions, and the MCMC algorithms implementing these methods.
+
+# Model Specification
+
+We observe a probability sample (PS) \((y_i, \mathbf{x}_i)\) for \(i = 1,\ldots,n\) and a nonprobability sample (NPS) \((\tilde{y}_\ell, \tilde{\mathbf{x}}_\ell)\) for \(\ell = 1,\ldots,\tilde{n}\). The logistic model is
+
+\[
+y_i \mid \boldsymbol{\beta} \sim \text{Bernoulli}(\theta_i), \qquad 
+\theta_i = \frac{\exp(\mathbf{x}_i'\boldsymbol{\beta})}{1 + \exp(\mathbf{x}_i'\boldsymbol{\beta})}.
+\]
+
+so each likelihood contribution is 
+
+\[
+p(y_i \mid {\beta}) = \frac{\exp({x}_i'{\beta})^{y_i}}{[1 + \exp({x}_i'{\beta})]}
+\]
+
+# Pseudolikelihood
+
+Given weights $w_1, \ldots, w_n$ equal to the inverse probabilities of selection in the PS after rescaling to sum to the sample 
+size $n$, we exponentiate the likelihood contributions as 
+
+\[
+\tilde{p}(y_i \mid {\beta}) = \frac{\exp({x}_i'{\beta})^{w_i y_i}}{[1 + \exp({x}_i'{\beta})]^{w_i}}
+\]
+
+A likelihood-based model is recovered by setting each weight to 1.
+
+# Prior Specification
+
+## Mixed-Distance Priors: General Form
+
+The general form is
+
+\[
+\boldsymbol{\beta} \sim \mathcal{N}(\hat{\boldsymbol{\beta}}_{NPS}, \operatorname{diag}(\sigma_1^2,\ldots,\sigma_p^2)).
+\]
+
+### HMC Implementation
+
+We target the log posterior
+
+\[
+\log p(\beta \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\, + \,
+\log \mathcal{N}(\hat{\boldsymbol{\beta}}_{NPS}, \operatorname{diag}(\sigma_1^2,\ldots,\sigma_p^2)).
+\]
+
+Equivalently, using the logit link, the log-likelihood terms are
+
+\[
+\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\}
+\]
+
+```{stanmodel}
+data {
+  int<lower=1> n;                    // PS sample size
+  int<lower=1> p;                    // number of predictors
+
+  matrix[n, p] X;                    // PS design matrix
+
+  array[n] int<lower=0, upper=1> y;  // PS outcomes
+
+  vector<lower=0>[n] w;              // PS weights (rescaled to sum to n)
+
+  vector[p] beta_prior_mean;         // beta hat NPS (will calculate in R)
+  vector<lower=0>[p] beta_prior_sd;  // sigma_j
+}
+
+parameters {
+  vector[p] beta;
+}
+
+model {
+  // Prior
+  beta ~ normal(beta_prior_mean, beta_prior_sd);
+
+  // Pseudolikelihood (only PS)
+  for (i in 1:n) {
+    target += w[i] * bernoulli_logit_lpmf(y[i] | X[i] * beta);
+  }
+}
+```
+
+We fit this model for each of the three following variations on the mixed-distance prior.
+
+### Mixed-Distance
+
+\[
+\sigma_j = |\hat{\beta}_{PS,j} - \hat{\beta}_{NPS,j}|.
+\]
+
+### Mixed-Distance-log
+
+\[
+\sigma_j = \sqrt{\frac{1}{\log \tilde{n}} \max\{(\hat{\beta}_{PS,j}-\hat{\beta}_{NPS,j})^2,\, \hat{\sigma}^2_{NPS,j}\}}.
+\]
+
+### Mixed-Distance-log10
+
+\[
+\sigma_j = \sqrt{\frac{1}{\log_{10} \tilde{n}} \max\{(\hat{\beta}_{PS,j}-\hat{\beta}_{NPS,j})^2,\, \hat{\sigma}^2_{NPS,j}\}}.
+\]
+
+
+## Power Prior
+
+A power prior on $\beta$ is
+
+\[
+p(\beta \mid \tilde{y}, \tilde{X}) \propto L(\beta \mid \tilde{y},\tilde{X})^a \, p(\beta),
+\]
+
+with a fixed exponent \(a\). The authors set \(a\) equal to the \(p\)-value resulting from a 
+Hotelling \(T^2\) test of equality between \(\hat{\beta}_{PS}\) and \(\hat{\beta}_{NPS}\). They also 
+place a \(t_3(0, 2.5)\) prior on each coefficient, resulting in the 
+posterior distribution
+\[
+p(\beta \mid \text{data}) \propto 
+\left\{ \prod_{i = 1}^n \frac{\exp({x}_i'{\beta})^{w_i y_i}}{[1 + \exp({x}_i'{\beta})]^{w_i}}  \right\}
+\left\{ \prod_{\ell = 1}^{\tilde{n}} \frac{\exp(\tilde{x}_\ell'{\beta})^{a \tilde{y}_\ell}}{[1 + \exp(\tilde{x}_\ell'{\beta})]^{a}} \right\} 
+\left\{\prod_{j=1}^p t_3(\beta_j \mid 0, 2.5)\right\}
+\]
+
+### HMC Implementation 
+
+In the Stan implementation, we target the following log posterior:
+
+\[
+\log p(\beta \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\, + \,
+a \sum_{\ell=1}^{\tilde{n}} \log \text{Bernoulli}\left(\tilde{y}_\ell \mid \text{logit}^{-1}(\tilde{x}_\ell'\beta)\right)
+\, + \,
+\sum_{j=1}^{p} \log t_3(\beta_j \mid 0, 2.5).
+\]
+
+Equivalently, using the logit link, the log-likelihood terms are
+
+\[
+\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\},
+\qquad
+\log p(\tilde{y}_\ell \mid \beta) = \tilde{y}_\ell (\tilde{x}_\ell'\beta) - \log\{1 + \exp(\tilde{x}_\ell'\beta)\}.
+\]
+
+```{stanmodel}
+data {
+  int<lower=1> n;                 // PS sample size
+  int<lower=1> n_np;              // NPS sample size
+  int<lower=1> p;                 // number of coefficients
+
+  matrix[n, p] X;                 // PS design matrix
+  matrix[n_np, p] X_np;           // NPS design matrix
+
+  array[n] int<lower=0, upper=1> y;        // PS outcomes
+  array[n_np] int<lower=0, upper=1> y_np;  // NPS outcomes
+
+  vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
+  real<lower=0, upper=1> a;       // power prior exponent
+}
+
+parameters {
+  vector[p] beta;
+}
+
+model {
+  // Prior: t_3(0, 2.5)
+  beta ~ student_t(3, 0, 2.5);
+
+  // PS pseudolikelihood
+  for (i in 1:n) {
+    target += w[i] * bernoulli_logit_lpmf(y[i] | X[i] * beta);
+  }
+
+  // NPS likelihood (power prior)
+  for (l in 1:n_np) {
+    target += a * bernoulli_logit_lpmf(y_np[l] | X_np[l] * beta);
+  }
+}
+```
+
+# References
+
+Salvatore, C., Biffignandi, S., Sakshaug, J., Wiśniowski, A., Struminskaya, B., 
+"Bayesian Integration of Probability and Nonprobability Samples for Logistic Regression," 
+Journal of Survey Statistics and Methodology, Volume 12, Issue 2, April 2024, Pages 458–492, 
+https://doi.org/10.1093/jssam/smad041.

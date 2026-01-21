@@ -468,67 +468,6 @@ power_prior_mh <- function(
 }
 ```
 
-
-
-### HMC Implementation 
-
-In the Stan implementation, we target the following log posterior:
-
-\[
-\log p(\beta \mid \cdot) =
-\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
-\, + \,
-a \sum_{\ell=1}^{\tilde{n}} \log \text{Bernoulli}\left(\tilde{y}_\ell \mid \text{logit}^{-1}(\tilde{x}_\ell'\beta)\right)
-\, + \,
-\sum_{j=0}^{p} \log t_3(\beta_j \mid 0, 2.5).
-\]
-
-Equivalently, using the logit link, the log-likelihood terms are
-
-\[
-\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\},
-\qquad
-\log p(\tilde{y}_\ell \mid \beta) = \tilde{y}_\ell (\tilde{x}_\ell'\beta) - \log\{1 + \exp(\tilde{x}_\ell'\beta)\}.
-\]
-
-Here, $w_i$ are the rescaled PS weights (summing to $n$), and $a$ is the power-prior exponent.
-
-```{stanmodel}
-data {
-  int<lower=1> n;                 // PS sample size
-  int<lower=1> n_np;              // NPS sample size
-  int<lower=1> p;                 // number of coefficients
-
-  matrix[n, p] X;                 // PS design matrix
-  matrix[n_np, p] X_np;           // NPS design matrix
-
-  array[n] int<lower=0, upper=1> y;        // PS outcomes
-  array[n_np] int<lower=0, upper=1> y_np;  // NPS outcomes
-
-  vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
-  real<lower=0, upper=1> a;       // power prior exponent
-}
-
-parameters {
-  vector[p] beta;
-}
-
-model {
-  // Prior: t_3(0, 2.5)
-  beta ~ student_t(3, 0, 2.5);
-
-  // PS pseudolikelihood
-  for (i in 1:n) {
-    target += w[i] * bernoulli_logit_lpmf(y[i] | X[i] * beta);
-  }
-
-  // NPS likelihood (power prior)
-  for (l in 1:n_np) {
-    target += a * bernoulli_logit_lpmf(y_np[l] | X_np[l] * beta);
-  }
-}
-```
-
 ## MCMC Wrapper: All Prior Specifications
 
 We use a wrapper function to call the above MCMC implementations for all four prior specifications. 
@@ -553,8 +492,6 @@ The three variants of the mixed-distance prior we use differ in how \(\sigma_j^2
 \]
 
 The wrapper function follows.
-
-<!-- TODO: change which function is called for PP -->
 
 ```{r}
 nps_prior_mcmc <- function(
