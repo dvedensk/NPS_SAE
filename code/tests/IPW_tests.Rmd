@@ -1,0 +1,422 @@
+---
+title: "IPW methods"
+author: "Dan"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+# Load Data
+
+```{r load-libraries, include=FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(here)
+library(survey)
+
+source(here::here("code", "models", "bulm.R"))
+# source("/home/d/Desktop/Mizzou/Research/MSS_NPS/code/models/bulm.R")
+```
+
+We'll set a few parameters for the test run here.
+For a quick diagnostic, you will want to set n_iter fairly low (maybe 100).
+```{r set-params}
+response_var <- "PUBCOV"  # or whatever response variable you're using
+alpha <- 0.05
+n_iter <- 2000
+n_burn <- 500
+```
+
+```{r regenerate-samples, include=FALSE, cache=TRUE}
+source(here::here("code", "tests", "create_test_sample.R"))
+
+# Load the generated samples
+load(here::here("data", "test_sample.RData"), verbose = TRUE)
+
+# Load and factor population for comparisons (matches main.R)
+acs_pop <- read_csv(here::here("data", "ACS_NPS_pop.csv")) %>%
+  mutate(
+    AGEP_binned = factor(AGEP_binned),
+    RAC1P = factor(RAC1P),
+    SEX = factor(SEX),
+    PUMA = factor(PUMA)
+  )
+```
+
+We want the default weights to sum to the population, but some methods will require them to sum to the sample size.
+```{r check_weights}
+ps_df <- rename(ps_df, weights=PWGTP)
+nps_df <- rename(nps_df, weights=PWGTP)
+ps_df$weights <-  nrow(acs_pop) * ps_df$weights / sum(ps_df$weights)
+ps_scale_weights <- nrow(ps_df) * ps_df$weights / sum(ps_df$weights)
+
+cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
+cat("Weights add up to:", sum(ps_df$weights), "\n")
+cat("Population N: ", nrow(acs_pop), "\n")
+``` 
+
+Set covariates and random effect variables
+```{r}
+X_formula   <- as.formula("~ AGEP + RAC1P + SEX")
+Psi_formula <- as.formula("~ -1 + PUMA")
+```
+
+# Data Overview
+
+```{r overview, include=FALSE}
+data.frame(
+  Sample = c("Population", "PS", "NPS"),
+  N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
+  PUBCOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
+) %>%
+    mutate(PUBCOV_Rate = round(PUBCOV_Rate, 3))
+```
+
+# Model Specification
+IPW (inverse probability weighting), or quasirandomization, methods refer to any methods that model the probability of sample inclusion.
+These probabilities are taken to be inverse weights.
+There are two important choices to examine: the model for the weights and how to use the weights downstream. 
+They can either be incorporated into a direct estimator or a second model.
+
+For the first stage, we consider three different choices, all of which are based on the description in Elliott and Valliant (2017) pp. 256-257.
+We'll borrow the following notation to describe their methods
+
+* Define $S_i$ be the indicator for inclusion in the *probability* sample and $S_i^*$ for the *nonprobability* sample.
+* Let $\mathbf{x}_i$ be the set of covariates available in both samples.
+
+1. Logistic regression assuming an ignorable design. 
+   In this instance, combine both samples and define a new variable $Z_i$ such that $Z_i=1$ for $i\in NPS$ and $Z_i=0$ for $i\in PS$. 
+   So, $Z_i$ is an indicator for inclusion in the NPS conditional on being in one of the samples.
+   Assuming (perhaps unrealistically) that we have access to the design information, we would calculate ``the probability of selection for the nonprobability unity in the probability sampling frame", $\tilde{w}_i$ and set
+   \[w_i = \tilde{w}_i \frac{\hat{P}(Z_i=0\mid x_i=x_o)}{\hat{P}(Z_i=1\mid x_i=x_o)}\]
+   
+2. Beta regression of $\mathbf{x}_i$ on $\tilde{w}_i^{-1}$. 
+   If the design is not ignorable, estimate $\hat{P}(S_i = 1\mid \mathbf{x}_i=\mathbf{x}_o)$ for the probability sample and predicting $P(S_i|x_i=x_o)$ for $i\in NPS$.
+   
+3. Weighted logistic regression: Estimate $P(S_i^*=1\mid x_i=x_o)$ not conditioned on being in the combined probability and nonprobability sample
+
+With some set of weights for the NPS in hand, we now either 
+
+1. Model the NPS alone, in which case we have all of the weights we need (we'll ignore this for now)
+2. Or, in the data integration case, where we want to analyze the PS and NPS together, we need to scale the weights
+
+> so that the weighted fraction of the nonprobability sample is equal to the unweighted fraction of the nonprobability sample cases in the combined dataset, and similarly the weighted fraction of the probability sample is equal to the unweighted fraction of the probability sample cases in the combined dataset
+
+To do so, define $C_{S^*} = \frac{n_{S^*}}{n_S + n_{S^*}}\frac{\sum_{i} I(Z_i=0)\tilde{w}_i}{\sum_{i} I(Z_i=1)\tilde{w}_i}$ and $C_S = \frac{n_S}{n_{S^*} + n_S}$. 
+For the non-probability sample weights, set $\hat{w}_i = C_{S^*}\tilde{w}_i$ and for the probability sample weights set $\hat{w}_i = C_s\tilde{w}_i$.
+
+(Note, with XL Meng's work in mind we may want to consider whether it makes more sense to scale in proportion to the ESS of PS vs. NPS not the actual sample size)
+
+The following function implements all of the above
+
+```{r}
+estimate_ipw <- function(ps_df, nps_df, X_formula, method) {
+  if(! (method %in% c("ignorable", "beta_reg", "weighted"))) {
+    stop()
+  }
+
+  n_ps <- nrow(ps_df)
+  n_nps <- nrow(nps_df)
+  ps_weights <- ps_df$weights #Need to double check whether scaling matters here
+
+  if(method == "beta_reg") {
+    filter_id <- which(ps_weights == 1)
+    ps_df$weights[filter_id] <- 1.005 #jitter because any weights = 1 cause numerical issues
+    beta_reg_out <- betareg::betareg(formula=as.formula(paste("1/weights",
+                                                     deparse(X_formula))),
+                            data=ps_df)
+    nps_prob_pred <- predict(beta_reg_out, newdata=nps_df)
+  } else if(method == "weighted") {
+    combined <- bind_rows(
+      ps_df  %>% mutate(Z = 0),
+      nps_df %>% mutate(Z = 1)
+    )
+
+    combined <- combined %>%
+        mutate(weights = ifelse(Z == 1, 1, weights))
+
+    fit_prop <- glm(
+      formula = as.formula(paste0("Z ", deparse(X_formula))),
+      weights = weights,
+      family  = binomial(),
+      data    = combined
+    )
+  
+    nps_prob_pred  <- predict(fit_prop, newdata = nps_df, type = "response")
+  }
+  nps_weights <- 1/nps_prob_pred
+
+  # Normalize 
+  C_s <- n_ps/(n_nps + n_ps)
+  C_s_star <- n_nps/(n_nps + n_ps) * sum(ps_weights)/sum(nps_weights)
+  nps_weights <- nps_weights * C_s_star
+  ps_weights <- ps_weights * C_s  
+
+  return(list(nps_weights = nps_weights,
+              ps_weights = ps_weights))
+}
+
+```
+
+# Fit Model
+For each set of weights that are calculated, we then have to select a method for estimating population quantities.
+This can be 
+
+1. a Horvitz-Thompson style estimator $\sum_{i\in PS} w_i y_i + \sum_{i \in NPS} \hat{w}_i y_i$
+2. a Bayesian pseudo-likelihoods model, where the likelihood is exponentially reweighted
+\[p(y|\cdot) \propto \prod_{i\in PS} [p_i^{y_i}(1-p_i)^{1-y_i}]^{w_i}\prod_{i\in NPS} [p_i^{y_i}(1-p_i)^{1-y_i}]^{\hat{w}_i}\]
+and we model the Bernoulli probabilities, $p_i$ as
+\[p_i = \mathbf{x}_i'\mathbf{\beta} + \mathbf{\psi_i}'\mathbf{\eta}\]
+where $\beta$ is a vector of fixed effects and $\eta$ a vector of random effects.
+The vector $\mathbf{x}_i$ is the covariate vector associated with household $i$ and $\psi_i$ is a one-hot vector indexing the PUMA household $i$ belongs to.
+
+First, we'll estimate both types of IPW weights
+```{r fit-model, cache=TRUE}
+#weights_ignorable <- estimate_ipw(ps_df, nps_df, X_formula, "ignorable")
+weights_beta <- estimate_ipw(ps_df, nps_df, X_formula, "beta_reg")
+weights_uncond <- estimate_ipw(ps_df, nps_df, X_formula, "weighted")
+
+weights_beta <- c(weights_beta$ps_weights, weights_beta$nps_weights)
+weights_uncond <- c(weights_uncond$ps_weights, weights_uncond$nps_weights)
+```
+
+We'll then calculate a Horvitz-Thompson style direct estimator with each type of weight
+```{r fit-HT, cache=TRUE}
+X <- model.matrix(X_formula, data=rbind(ps_df, nps_df))
+Psi <- model.matrix(Psi_formula, data=rbind(ps_df, nps_df))
+y <- c(ps_df$PUBCOV, nps_df$PUBCOV)
+PUMAs <- c(ps_df$PUMA, nps_df$PUMA)
+
+scale_weights_beta <- weights_beta/sum(weights_beta) * length(y)
+scale_weights_uncond <- weights_uncond/sum(weights_uncond) * length(y)
+
+beta_df <- data.frame(PUBCOV=y, PUMA=PUMAs, weights=weights_beta)
+uncond_df <- data.frame(PUBCOV=y, PUMA=PUMAs, weights=weights_uncond)
+
+HT <- function(df, model_name) {
+  samp.design <- svydesign(ids = ~1, weights = ~weights, data = df)
+
+  # Calculate direct estimates by PUMA with standard errors
+  direst <- survey::svyby(
+    as.formula(paste0("~", "PUBCOV")), #response value hard-coded
+    ~PUMA,
+    samp.design,
+    svymean,
+    na.rm = TRUE,
+    vartype = "se",
+    keep.names = FALSE
+  ) %>%
+    arrange(PUMA) %>%
+    transmute(
+      PUMA,
+      point_est = .data[[response_var]],
+      lower_CI = point_est + qnorm(alpha / 2) * se,
+      upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+      model = model_name
+    )
+}
+
+beta_out <- HT(beta_df, "beta_HT")
+uncond_out <- HT(uncond_df, "uncond_HT") 
+```
+
+We'll also fit a unit-level model with each type of weight. 
+Note that to generate the population-level predictions we need to provide `grouped_pop_df`, which summarizes the counts per cell.
+
+```{r fit-models, cache=TRUE}
+grouped_pop_df <- acs_pop %>% group_by(PUMA, AGEP, RAC1P, SEX) %>% tally
+
+bulm_beta <- bulm_results(grouped_pop_df=grouped_pop_df,
+                          weights=scale_weights_beta,
+                          alpha=.05,
+                          X=X,
+                          Psi=Psi,
+                          y=y,
+                          sigma2_beta=3,
+                          X_formula=X_formula,
+                          Psi_formula=Psi_formula,
+                          iter=n_iter,
+                          burn=n_burn)
+
+bulm_beta_out <- bulm_beta$summaries
+bulm_beta_out$model = "bulm_beta"
+
+bulm_uncond <- bulm_results(grouped_pop_df=grouped_pop_df,
+                          weights=scale_weights_uncond,
+                          alpha=.05,
+                          X=X,
+                          Psi=Psi,
+                          y=y,
+                          sigma2_beta=3,
+                          X_formula=X_formula,
+                          Psi_formula=Psi_formula,
+                          iter=n_iter,
+                          burn=n_burn)
+
+bulm_uncond_out <- bulm_uncond$summaries
+bulm_uncond_out$model <- "bulm_uncond"
+```
+
+Finally, as a point of comparison we fit two more unit-level models.
+The first of these assumes an iid sample (we want to make sure the model alone isn't outperforming the IPW methods).
+The second uses only the probability sample with its original weight (since we want to make sure it is better to incorporate the NPS data than to disregard it).
+
+```{r fit-baseline, cache=TRUE}
+bulm_unweight <- bulm_results(grouped_pop_df=grouped_pop_df,
+                          weights=rep(1, times=length(scale_weights_uncond)),
+                          alpha=.05,
+                          X=X,
+                          Psi=Psi,
+                          y=y,
+                          sigma2_beta=3,
+                          X_formula=X_formula,
+                          Psi_formula=Psi_formula,
+                          iter=n_iter,
+                          burn=n_burn)
+
+bulm_unweight_out <- bulm_unweight$summaries
+bulm_unweight_out$model <- "bulm_unweight"
+
+ps_scale_weights <- ps_df$weights/sum(ps_df$weights) * nrow(ps_df)
+bulm_ps_only <- bulm_results(grouped_pop_df=grouped_pop_df,
+                             weights=ps_scale_weights,
+                             alpha=.05,
+                             X=model.matrix(X_formula, data=ps_df),
+                             Psi=model.matrix(Psi_formula, data=ps_df),
+                             y=ps_df$PUBCOV,
+                             sigma2_beta=3,
+                             X_formula=X_formula,
+                             Psi_formula=Psi_formula,
+                             iter=n_iter,
+                             burn=n_burn)
+
+bulm_ps_only_out <- bulm_ps_only$summaries
+bulm_ps_only_out$model <- "bulm_ps_only"
+```
+
+# Results
+
+We can check a few chains for convergence
+```{r diagnostics}
+# Check convergence, extract estimates, etc.
+
+plot(bulm_beta$chains$beta[,1], type="l")
+plot(bulm_ps_only$chains$beta[,1], type="l")
+plot(bulm_unweight$chains$beta[,1], type="l")
+plot(bulm_uncond$chains$beta[,1], type="l")
+```
+
+# Performance Comparison
+
+## Calculate True Values and Direct Estimates
+
+```{r true-values}
+# Calculate true population values by PUMA (what we're trying to estimate)
+true_values <- acs_pop %>%
+  group_by(PUMA) %>%
+  summarize(
+    response_true = mean(.data[[response_var]], na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r direct-estimates}
+# Add weights to PS sample (from test_sample.RData, ps contains weights)
+ps_df <- ps_df %>%
+  mutate(weights = ps$weights)
+
+# Create survey design
+samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps_df)
+
+# Calculate direct estimates by PUMA with standard errors
+direst <- svyby(
+  as.formula(paste0("~", response_var)),
+  ~PUMA,
+  samp.design,
+  svymean,
+  na.rm = TRUE,
+  vartype = "se",
+  keep.names = FALSE
+) %>%
+  arrange(PUMA) %>%
+  transmute(
+    PUMA,
+    point_est = .data[[response_var]],
+    lower_CI = point_est + qnorm(alpha / 2) * se,
+    upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+    model = "direst"
+  )
+```
+
+## Calculate Performance Metrics
+
+```{r performance-metrics}
+# Helper function for interval score (from main.R)
+int_score <- function(alpha, y, lower, upper) {
+  (upper - lower) +
+    (2 / alpha) * (lower - y) * (y < lower) +
+    (2 / alpha) * (y - upper) * (y > upper)
+}
+
+# Combine your model results with direct estimates
+all_results <- bind_rows(direst,
+                         bulm_beta_out,
+                         beta_out,
+                         uncond_out,
+                         bulm_uncond_out,
+                         bulm_unweight_out,
+                         bulm_ps_only_out)
+
+# Calculate performance metrics for all models
+performance_metrics <- true_values %>%
+  left_join(all_results, by = "PUMA") %>%  # Replace 'direst' with 'all_results' when you have your model
+  mutate(model = ifelse(model=="direst", "baseline_HT", model)) %>% 
+  group_by(model) %>%
+  summarize(
+    MSE = mean((response_true - point_est)^2),
+    MAB = mean(abs(response_true - point_est)),
+    Coverage = mean(between(response_true, lower_CI, upper_CI)),
+    `Int. Score` = mean(int_score(alpha, response_true, lower_CI, upper_CI)),
+    .groups = "drop"
+  )
+
+performance_metrics
+```
+The general trends in the table above are reasonable. 
+All estimators outperform the direct estimate baseline 
+(the one exception being the HT estimator with beta weights, which I am surprised by, but can't find a bug).
+The "unconditional" weights perform best, whether they are used in an HT estimator or in a model.
+That is, the HT with unconditional weights outperforms all other HT estimators while the model with unconditional weights outperforms all other models.
+In fact, the model with unconditional weights is better than all other methods both in terms of MSE and interval score.
+While the PS-only model and baseline direct estimator appear to attain nearly nominal CI coverage, their higher Interval Scores imply that this is due to overly wide intervals. 
+(This is very evident in the figure below, where these two methods have much wider CIs than any of the other plotted methods.)
+
+
+## Visualize Estimates vs Truth
+
+```{r visualize}
+# Plot estimates vs truth for direct estimates (and your model)
+ggplot(true_values %>% left_join(all_results, by = "PUMA"),
+       aes(x = response_true, y = point_est)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), alpha = 0.3) +
+  labs(
+    title = "Direct Estimates vs True PUMA Values",
+    x = "True PUBCOV Rate",
+    y = "Estimated PUBCOV Rate"
+  ) +
+  facet_wrap(~model) + 
+  theme_bw()
+
+ggsave("IPW_plots.pdf", limitsize=FALSE)
+# After fitting your model, add facet_wrap(~model) to compare multiple methods
+```
+
