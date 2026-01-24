@@ -32,10 +32,10 @@ vsw_out <- function(ps, nps, X_formula = NULL, response){
     left_join(Z_hat_nps, by = "PUMA", suffix = c("_ps", "_nps"))
   
   nps_count <- nps %>%
-    count(PUMA, name = "n_nps")%>%
+    dplyr::count(PUMA, name = "n_nps")%>%
     semi_join(ps, by = "PUMA")
   
-  ps_count <- ps %>% count(PUMA, name = "n_ps")
+  ps_count <- ps %>% dplyr::count(PUMA, name = "n_ps")
   
   K <- nrow(Z_hat_ps)
   C <- length(unique(ps[[response]]))

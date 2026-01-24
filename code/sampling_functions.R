@@ -78,7 +78,8 @@ get_PS <- function(pop_df,
 get_NPS <- function(pop_df,
                     samp_frac = .05,
                     weight_config = list(PWGTP = 0.3, AGEP = 0.7),
-                    internet_only = FALSE) {
+                    internet_only = FALSE,
+                    rescale_after_cap = FALSE) {
   if (internet_only) {
     pop_df <- filter(pop_df, ACCESSINET < 3) # 3 indicates no access
   }
@@ -96,8 +97,30 @@ get_NPS <- function(pop_df,
 
   # Simple inclusion probability calculation (preserves extreme bias)
   # This approach achieves much higher DDC than inclusionprobabilities()
-  inclusion_probs <- samp_frac * size_var / mean(size_var)
-  inclusion_probs <- pmin(inclusion_probs, 1) # Cap at 1.0
+  if (rescale_after_cap) {
+    target <- samp_frac
+    f_mean_prob <- function(k) {
+      mean(pmin(k * size_var, 1), na.rm = TRUE) - target
+    }
+    upper <- samp_frac / mean(size_var, na.rm = TRUE)
+    if (!is.finite(upper) || upper <= 0) {
+      upper <- 1
+    }
+    iter <- 0
+    while (f_mean_prob(upper) < 0 && iter < 50) {
+      upper <- upper * 2
+      iter <- iter + 1
+    }
+    if (f_mean_prob(upper) < 0) {
+      inclusion_probs <- pmin(upper * size_var, 1)
+    } else {
+      k_star <- uniroot(f_mean_prob, lower = 0, upper = upper)$root
+      inclusion_probs <- pmin(k_star * size_var, 1)
+    }
+  } else {
+    inclusion_probs <- samp_frac * size_var / mean(size_var, na.rm = TRUE)
+    inclusion_probs <- pmin(inclusion_probs, 1) # Cap at 1.0
+  }
   inclusion_probs[is.na(inclusion_probs)] <- 0
 
   weights <- 1 / inclusion_probs

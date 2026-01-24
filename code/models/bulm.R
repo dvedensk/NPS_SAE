@@ -94,16 +94,25 @@ generate_bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=
 
 get_stan_summaries <- function(y, X, Psi, weights, sigma2_beta=3, n_chains,
                                mcmc_burn, mcmc_iter, grouped_pop_df, alpha,
-                               X_formula, Psi_formula, threads_per_chain=4) {
+                               X_formula, Psi_formula, threads_per_chain=4,
+                               seed = NULL) {
     
   bulm_stan_dat <- list(r=ncol(Psi), nn=length(y), p=ncol(X),
                         Y=y, weights=weights,
                         puma=apply(Psi, 1, which.max),
                         X=X, sigma2_beta=3)
 
-  bulm_stan_out <- stan_bulm_mod$sample(data=bulm_stan_dat, chains=n_chains,
-                                        parallel_chains=n_chains, iter_warmup=mcmc_burn, 
-                                        iter_sampling=mcmc_iter, threads_per_chain=threads_per_chain)
+  sample_args <- list(
+    data = bulm_stan_dat,
+    chains = n_chains,
+    parallel_chains = n_chains,
+    iter_warmup = mcmc_burn,
+    iter_sampling = mcmc_iter,
+    threads_per_chain = threads_per_chain
+  )
+  if (!is.null(seed)) sample_args$seed <- seed
+
+  bulm_stan_out <- do.call(stan_bulm_mod$sample, sample_args)
    
   bulm_stan_pp <- post_preds(grouped_pop_df=acs_pop_grouped,
                              beta=bulm_stan_out$draws("beta"),
