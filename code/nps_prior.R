@@ -221,7 +221,7 @@ nps_prior_mcmc <- function(
     beta_NP_hat <- coef(glm_fit_NP) %>% 
         as.numeric()
 
-    stopifnot("Some coefficients are NA; X_NP may be ill-conditioned." = !anyNA(beta_hat))
+    stopifnot("Some coefficients are NA; X_NP may be ill-conditioned." = !anyNA(beta_NP_hat))
     
     diff_vec <- beta_hat - beta_NP_hat
     sq_dist <- diff_vec^2
