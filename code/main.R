@@ -6,7 +6,6 @@ library(survey)
 library(BayesLogit)
 library(Matrix)
 library(LaplacesDemon)
-library(matrixStats)
 if (!requireNamespace("cmdstanr", quietly = TRUE)) {
   stop("cmdstanr is required; install it via install.packages('cmdstanr').")
 }
@@ -210,7 +209,7 @@ for (sim in 1:Nsim) {
     parallel_chains = n_chains,
     iter_warmup = mcmc_burn,
     iter_sampling = mcmc_iter,
-    threads_per_chain = 4,
+    threads_per_chain = mcmc_threads_per_chain,
     seed = curr_seed
   )
 
