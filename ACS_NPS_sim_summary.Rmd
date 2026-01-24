@@ -1,0 +1,47 @@
+---
+title: "ACS NPS Simulation Summary"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, echo = TRUE)
+library(dplyr)
+library(knitr)
+```
+
+## Model-level summary (ordered by MSE)
+
+```{r}
+load("data/ACS_NPS_simulation_results.RData")
+stopifnot(exists("summary_df"))
+
+# Wall-clock duration of full 15-sim run
+wall_time <- list(
+  start = as.POSIXct("2026-01-20 20:11:00", tz = Sys.timezone()),
+  end   = as.POSIXct("2026-01-21 08:08:06", tz = Sys.timezone())
+)
+wall_elapsed <- difftime(wall_time$end, wall_time$start, units = "hours")
+cat(sprintf("Full run wall time: %.2f hours (start %s, end %s)\n\n",
+            as.numeric(wall_elapsed),
+            format(wall_time$start, \"%Y-%m-%d %H:%M\"),
+            format(wall_time$end, \"%Y-%m-%d %H:%M\")))
+
+summary_df <- summary_df %>%
+  arrange(MSE)
+
+kable(
+  summary_df,
+  digits = c(5, 5, 5, 3, 3),
+  caption = "Model metrics aggregated across simulations"
+)
+```
+
+## Highlights
+- **Top MSE:** bulm_uncond, bulm_beta, mrp-p, mrp-p-int (all ≲0.0011).
+- **Coverage leaders:** bulm_ps_only (0.957), NPS prior PP (0.955–0.950), mrp-r variants (~0.93).
+- **Interval Score (lower is better):** bulm_uncond/bulm_beta ≈0.15–0.16 are best; IPW HT (beta) is worst (3.006).
+- **Lowest performers (MSE):** IPW HT (beta) ≫ direst > VSW.
+
+## Notes
+- VSW reports NA for interval metrics by design.
+- NPS power-prior variants now produce intervals (pseudolikelihood and raking weight-covariate).

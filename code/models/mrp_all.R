@@ -109,7 +109,9 @@ getMRP=function(MR=nps,
                 L=100,
                 threads=4,
                 n_chains=2,
-                seed=NULL){
+                seed=NULL,
+                stan_iter=1000,
+                stan_warmup=500){
 
   # Validate L parameter
   if (bootstrap && (is.null(L) || L < 1)) {
@@ -162,8 +164,8 @@ getMRP=function(MR=nps,
     chains = n_chains,
     parallel_chains = n_chains,
     threads_per_chain = threads,
-    iter_warmup = 500,
-    iter_sampling = 1000
+    iter_warmup = stan_warmup,
+    iter_sampling = stan_iter
   )
   if (!is.null(seed)) sample_args$seed <- seed
   
@@ -401,7 +403,9 @@ getMRP_INT <- function(MR,
                        L=100,
                        threads=4,
                        n_chains=2,
-                       seed=NULL
+                       seed=NULL,
+                       stan_iter=1000,
+                       stan_warmup=500
 ) {
 
   # Validate L parameter
@@ -590,8 +594,8 @@ getMRP_INT <- function(MR,
     chains = n_chains,
     parallel_chains = n_chains,
     threads_per_chain = threads,
-    iter_warmup = 500,
-    iter_sampling = 1000
+    iter_warmup = stan_warmup,
+    iter_sampling = stan_iter
   )
   if (!is.null(seed)) sample_args$seed <- seed
   

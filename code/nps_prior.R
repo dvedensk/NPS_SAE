@@ -15,8 +15,6 @@ format_stan_output <- function(
   S <- nrow(beta_draws)
 
   # Posterior predictive for PS units
-  # Draw linear predictor and then sample 1 with probability expit(eta), 0 otherwise
-  # (Using latent Uniform(0,1) variates makes this extremely fast).
   eta <- tcrossprod(X, beta_draws) # n x S
   if (!is.null(eta_draws)) {
     eta_domain <- t(eta_draws[, domain_index, drop = FALSE])
@@ -27,23 +25,35 @@ format_stan_output <- function(
   y_pred <- (U < P)
   storage.mode(y_pred) <- "integer"
 
-  # Area-level summaries
-  by_PUMA_sums <- rowsum(y_pred, group = PUMA, reorder = FALSE)
-  by_PUMA_means <- by_PUMA_sums / as.numeric(table(PUMA))[PUMA_levels]
-  point_est <- rowMeans(by_PUMA_means)
-  CI <- rowQuantiles(
+  # Area-level summaries (robust to factor/character PUMA)
+  group_idx <- as.integer(factor(PUMA, levels = PUMA_levels))
+  by_PUMA_sums <- matrix(0L, nrow = length(PUMA_levels), ncol = S)
+  for (i in seq_len(length(group_idx))) {
+    g <- group_idx[i]
+    if (!is.na(g)) by_PUMA_sums[g, ] <- by_PUMA_sums[g, ] + y_pred[i, ]
+  }
+  denom <- tabulate(group_idx, nbins = length(PUMA_levels))
+  denom[denom == 0] <- NA_integer_
+  by_PUMA_means <- sweep(by_PUMA_sums, 1, denom, "/")
+
+  point_est <- rowMeans(by_PUMA_means, na.rm = TRUE)
+  CI <- matrixStats::rowQuantiles(
     by_PUMA_means,
-    probs = c(typeIerr / 2, 1 - typeIerr / 2)
+    probs = c(typeIerr / 2, 1 - typeIerr / 2),
+    na.rm = TRUE
   )
+
   res_df <- data.frame(
     PUMA = PUMA_levels,
     point_est = point_est,
     lower_CI = CI[, 1],
     upper_CI = CI[, 2],
-    model = model_name
+    model = model_name,
+    row.names = NULL,
+    stringsAsFactors = FALSE
   )
 
-  return(res_df)
+  res_df
 }
 
 scale_weight_covariate <- function(x, scale_covariate) {
