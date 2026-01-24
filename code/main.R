@@ -1,3 +1,4 @@
+library(matrixStats)
 library(tidyverse) # Loads readr, dplyr, purrr, ggplot2, etc.
 library(sampling)
 library(mvtnorm)
@@ -40,11 +41,6 @@ stan_bulm_mod <- cmdstan_model(
   cpp_options = list(stan_threads = TRUE)
 )
 
-nps_prior_md_mod <- cmdstan_model(
-  file.path("code", "models", "nps_prior_md.stan"),
-  cpp_options = list(stan_threads = TRUE)
-)
-
 nps_prior_pp_mod <- cmdstan_model(
   file.path("code", "models", "nps_prior_pp.stan"),
   cpp_options = list(stan_threads = TRUE)
@@ -72,11 +68,12 @@ nps_prior_which <- c("pp")
 scale_nps_prior_weight_covariate <- TRUE
 
 # Other simulation parameters
-Nsim <- 1
+Nsim <- 15
 alpha <- .05 # for interval estimates
 mcmc_iter <- 1000
 mcmc_burn <- 1000
 n_chains <- 2
+mcmc_threads_per_chain <- 4
 
 # ============================================================
 # LOAD POPULATION DATA
@@ -297,8 +294,12 @@ for (sim in 1:Nsim) {
     ps = ps,
     acs_pop = acs_pop,
     bootstrap = TRUE, # Bootstrap needed for MRP-R uncertainty (not for MRP-P)
+    L = 100,
     seed = curr_seed,
-    n_chains = n_chains
+    n_chains = n_chains,
+    stan_iter = mcmc_iter,
+    stan_warmup = mcmc_burn,
+    threads = mcmc_threads_per_chain
   )
   mrpr <- mrp$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpp <- mrp$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
@@ -311,8 +312,12 @@ for (sim in 1:Nsim) {
     mod = modINT,
     adjust = TRUE, # Adjust PS weights for population size (recommended)
     bootstrap = TRUE, # Bootstrap needed for MRP-INT-R uncertainty
+    L = 100,
     seed = curr_seed,
-    n_chains = n_chains
+    n_chains = n_chains,
+    stan_iter = mcmc_iter,
+    stan_warmup = mcmc_burn,
+    threads = mcmc_threads_per_chain
   )
   mrpint_r <- mrp1$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpint_p <- mrp1$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
@@ -346,7 +351,7 @@ for (sim in 1:Nsim) {
   }
 
   nps_prior_pl_res <- nps_prior_mcmc(
-    md_mod = nps_prior_md_mod,
+    md_mod = NULL,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
@@ -366,7 +371,7 @@ for (sim in 1:Nsim) {
     domain_ps = domain_ps,
     domain_nps = domain_nps,
     domain_levels = domain_levels,
-    threads_per_chain = 4,
+    threads_per_chain = mcmc_threads_per_chain,
     parallel_chains = n_chains
   )
 
@@ -387,7 +392,7 @@ for (sim in 1:Nsim) {
   nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
 
   nps_prior_rak_res <- nps_prior_mcmc(
-    md_mod = nps_prior_md_mod,
+    md_mod = NULL,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
@@ -409,7 +414,7 @@ for (sim in 1:Nsim) {
     domain_levels = domain_levels,
     weight_covariate = list(ps = ps_scale_weights, nps = nps_rake_weights),
     scale_weight_covariate = scale_nps_prior_weight_covariate,
-    threads_per_chain = 4,
+    threads_per_chain = mcmc_threads_per_chain,
     parallel_chains = n_chains
   )
 
