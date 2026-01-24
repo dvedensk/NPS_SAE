@@ -1,3 +1,6 @@
+// LEGACY: older NPS prior model (logistic, no domain effects).
+// Current implementation uses nps_prior_pp.stan; kept for reference only.
+
 data {
   int<lower=1> n;                 // PS sample size
   int<lower=1> n_np;              // NPS sample size
