@@ -16,7 +16,7 @@ parameters {
 model {
   vector[nn] linPred;
   eta ~ normal(0, sigma_eta);
-  sigma_eta ~ cauchy(-1, 5);
+  sigma_eta ~ cauchy(0, 5);
   linPred = X*beta + eta[puma];
   for(i in 1:nn){
     target += weights[i] * bernoulli_logit_lpmf(Y[i] | linPred[i]); 
