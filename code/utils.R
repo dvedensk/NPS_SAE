@@ -45,7 +45,7 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
     filter_id <- which(ps_weights == 1)
     ps$PWGTP[filter_id] <- 1.001
     beta_reg_out <- betareg::betareg(formula=as.formula(paste("1/PWGTP",
-                                                     deparse(X_formula))),
+                                                     deparse(cov_formula))),
                             data=ps)
     nps_prob_pred <- predict(beta_reg_out, newdata=nps)    
   } else if(method == "weighted") {
