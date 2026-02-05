@@ -507,7 +507,7 @@ performance_metrics
 ## Visualize Estimates vs Truth
 
 ```{r visualize}
-# Plot estimates vs truth for direct estimates (and your model)
+# Plot estimates vs truth for direct estimates and NPS Prior Models
 ggplot(true_values %>% left_join(all_results, by = "PUMA"),
        aes(x = response_true, y = point_est)) +
   geom_point(alpha = 0.5) +
