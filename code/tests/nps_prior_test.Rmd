@@ -1,0 +1,526 @@
+---
+title: "NPS Prior Test"
+author: "Ethan Pawl"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+    echo = TRUE, 
+    message = FALSE,
+    warning = FALSE, 
+    dev = "png"
+)
+knitr::opts_knit$set(root.dir = file.path("..", ".."))
+options(bitmapType = "cairo")
+```
+
+# Load Data
+
+```{r load-libraries, include=FALSE}
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(cmdstanr)
+library(here)
+library(matrixStats)
+library(survey)
+library(sampling)
+```
+
+We'll set a few parameters for the test run here:
+
+```{r set-params}
+alpha <- 0.05
+mcmc_iter <- 1000
+mcmc_burn <- 1000
+curr_seed <- 100
+
+scale_nps_prior_weight_covariate <- TRUE
+n_chains <- 2
+mcmc_threads_per_chain <- 1
+nps_prior_which <- c("pp", "md", "mdl", "mdl10")
+```
+
+```{r regenerate-samples, eval = FALSE}
+source(here::here("code", "tests", "create_test_sample.R"))
+```
+
+```{r load-samples}
+# Load the generated samples
+load(here::here("data", "test_sample.RData"), verbose = TRUE)
+
+# Load and factor population for comparisons (matches main.R)
+acs_pop <- read_csv(here::here("data", "ACS_NPS_pop.csv")) %>%
+  mutate(
+    AGEP_binned = factor(AGEP_binned),
+    RAC1P = factor(RAC1P),
+    SEX = factor(SEX),
+    PUMA = factor(PUMA)
+  )
+```
+
+We want the default weights to sum to the population, but some methods will require them to sum to the sample size.
+
+```{r check_weights}
+ps_df$weights <-  nrow(acs_pop) * ps_df$weights / sum(ps_df$weights)
+ps_scale_weights <- nrow(ps_df) * ps_df$weights / sum(ps_df$weights)
+
+cat("Rescaled weights add up to:", sum(ps_scale_weights), "\n")
+cat("Weights add up to:", sum(ps_df$weights), "\n")
+cat("Population N: ", nrow(acs_pop), "\n")
+``` 
+
+Set covariates and random effect variables:
+
+```{r setup-covs}
+X_formula   <- as.formula("~ AGEP_binned + RAC1P + SEX")
+
+X_ps <- model.matrix(X_formula, data = ps_df)
+y_ps <- ps_df$PUBCOV
+
+X_nps <- model.matrix(X_formula, data = nps_df)
+y_nps <- nps_df$PUBCOV
+```
+
+# Data Overview
+
+```{r overview, include=FALSE}
+data.frame(
+  Sample = c("Population", "PS", "NPS"),
+  N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
+  PUBCOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
+) %>%
+    mutate(PUBCOV_Rate = round(PUBCOV_Rate, 3))
+```
+
+# Model Specification
+
+We observe a probability sample (PS) \((y_i, \mathbf{x}_i)\) for \(i = 1,\ldots,n\) and a nonprobability sample (NPS) \((\tilde{y}_\ell, \tilde{\mathbf{x}}_\ell)\) for \(\ell = 1,\ldots,\tilde{n}\). The logistic model is
+
+\[
+y_i \mid \boldsymbol{\beta} \sim \text{Bernoulli}(\theta_i), \qquad 
+\theta_i = \frac{\exp(\mathbf{x}_i'\boldsymbol{\beta})}{1 + \exp(\mathbf{x}_i'\boldsymbol{\beta})}.
+\]
+
+so each likelihood contribution is 
+
+\[
+p(y_i \mid {\beta}) = \frac{\exp({x}_i'{\beta})^{y_i}}{[1 + \exp({x}_i'{\beta})]}
+\]
+
+## Pseudolikelihood
+
+Given weights $w_1, \ldots, w_n$ equal to the inverse probabilities of selection in the PS after rescaling to sum to the sample 
+size $n$, we exponentiate the likelihood contributions as 
+
+\[
+\tilde{p}(y_i \mid {\beta}) = \frac{\exp({x}_i'{\beta})^{w_i y_i}}{[1 + \exp({x}_i'{\beta})]^{w_i}}
+\]
+
+A likelihood-based model is recovered by setting each weight to 1.
+
+## Mixed-Distance Priors: General Form
+
+The general form is
+
+\[
+\boldsymbol{\beta} \sim \mathcal{N}(\hat{\boldsymbol{\beta}}_{NPS}, \operatorname{diag}(\sigma_1^2,\ldots,\sigma_p^2)).
+\]
+
+### HMC Implementation
+
+We target the log posterior
+
+\[
+\log p(\beta \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\, + \,
+\log \mathcal{N}(\hat{\boldsymbol{\beta}}_{NPS}, \operatorname{diag}(\sigma_1^2,\ldots,\sigma_p^2)).
+\]
+
+Equivalently, using the logit link, the log-likelihood terms are
+
+\[
+\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\}
+\]
+
+```{stanmodel, eval = FALSE}
+data {
+  int<lower=1> n;                    // PS sample size
+  int<lower=1> p;                    // number of predictors
+  int<lower=1> J;                    // number of domains
+
+  matrix[n, p] X;                    // PS design matrix
+
+  vector<lower=0, upper=1>[n] y;  // PS outcomes
+
+  vector<lower=0>[n] w;              // PS weights (rescaled to sum to n)
+
+  vector[p] beta_prior_mean;         // beta hat NPS (will calculate in R)
+  vector<lower=0>[p] beta_prior_sd;  // sigma_j
+
+  array[n] int<lower=1, upper=J> domain; // PS domain indices
+}
+
+parameters {
+  vector[p] beta;
+  vector[J] z_domain;
+  real<lower=0> sigma_domain;
+}
+
+transformed parameters {
+  vector[J] eta_domain;
+  eta_domain = sigma_domain * z_domain; // non-centered for better efficiency
+}
+
+model {
+  // Prior
+  beta ~ normal(beta_prior_mean, beta_prior_sd);
+  sigma_domain ~ normal(0, 1);
+  z_domain ~ normal(0, 1);
+
+  // Pseudolikelihood (only PS) (vectorized)
+  vector[n] eta = X * beta + eta_domain[domain]; // linear predictor
+  target += dot_product(w, y .* eta - log1p_exp(eta));
+}
+```
+
+We fit this model for each of the three following variations on the mixed-distance prior.
+
+### Mixed-Distance
+
+\[
+\sigma_j = |\hat{\beta}_{PS,j} - \hat{\beta}_{NPS,j}|.
+\]
+
+### Mixed-Distance-log
+
+\[
+\sigma_j = \sqrt{\frac{1}{\log \tilde{n}} \max\{(\hat{\beta}_{PS,j}-\hat{\beta}_{NPS,j})^2,\, \hat{\sigma}^2_{NPS,j}\}}.
+\]
+
+### Mixed-Distance-log10
+
+\[
+\sigma_j = \sqrt{\frac{1}{\log_{10} \tilde{n}} \max\{(\hat{\beta}_{PS,j}-\hat{\beta}_{NPS,j})^2,\, \hat{\sigma}^2_{NPS,j}\}}.
+\]
+
+
+## Power Prior
+
+A power prior on $\beta$ is
+
+\[
+p(\beta \mid \tilde{y}, \tilde{X}) \propto L(\beta \mid \tilde{y},\tilde{X})^a \, p(\beta),
+\]
+
+with a fixed exponent \(a\). The authors set \(a\) equal to the \(p\)-value resulting from a 
+Hotelling \(T^2\) test of equality between \(\hat{\beta}_{PS}\) and \(\hat{\beta}_{NPS}\). They also 
+place a \(t_3(0, 2.5)\) prior on each coefficient, resulting in the 
+posterior distribution
+\[
+p(\beta \mid \text{data}) \propto 
+\left\{ \prod_{i = 1}^n \frac{\exp({x}_i'{\beta})^{w_i y_i}}{[1 + \exp({x}_i'{\beta})]^{w_i}}  \right\}
+\left\{ \prod_{\ell = 1}^{\tilde{n}} \frac{\exp(\tilde{x}_\ell'{\beta})^{a \tilde{y}_\ell}}{[1 + \exp(\tilde{x}_\ell'{\beta})]^{a}} \right\} 
+\left\{\prod_{j=1}^p t_3(\beta_j \mid 0, 2.5)\right\}
+\]
+
+### HMC Implementation 
+
+In the Stan implementation, we target the following log posterior:
+
+\[
+\log p(\beta \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\, + \,
+a \sum_{\ell=1}^{\tilde{n}} \log \text{Bernoulli}\left(\tilde{y}_\ell \mid \text{logit}^{-1}(\tilde{x}_\ell'\beta)\right)
+\, + \,
+\sum_{j=1}^{p} \log t_3(\beta_j \mid 0, 2.5).
+\]
+
+Equivalently, using the logit link, the log-likelihood terms are
+
+\[
+\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\},
+\qquad
+\log p(\tilde{y}_\ell \mid \beta) = \tilde{y}_\ell (\tilde{x}_\ell'\beta) - \log\{1 + \exp(\tilde{x}_\ell'\beta)\}.
+\]
+
+```{stanmodel, eval = FALSE}
+data {
+  int<lower=1> n;                 // PS sample size
+  int<lower=1> n_np;              // NPS sample size
+  int<lower=1> p;                 // number of coefficients
+  int<lower=1> J;                 // number of domains
+
+  matrix[n, p] X;                 // PS design matrix
+  matrix[n_np, p] X_np;           // NPS design matrix
+
+  vector<lower=0, upper=1>[n] y;        // PS outcomes
+  vector<lower=0, upper=1>[n_np] y_np;   // NPS outcomes
+
+  vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
+  real<lower=0, upper=1> a;       // power prior exponent
+
+  array[n] int<lower=1, upper=J> domain;       // PS domain indices
+  array[n_np] int<lower=1, upper=J> domain_np; // NPS domain indices
+}
+
+parameters {
+  vector[p] beta;
+  vector[J] z_domain;
+  real<lower=0> sigma_domain;
+}
+
+transformed parameters {
+  vector[J] eta_domain;
+  eta_domain = sigma_domain * z_domain; // non-centered for better efficiency
+}
+
+model {
+  // Prior: t_3(0, 2.5)
+  beta ~ student_t(3, 0, 2.5);
+  sigma_domain ~ normal(0, 1);
+  z_domain ~ normal(0, 1);
+
+  // PS pseudolikelihood (vectorized)
+  vector[n] eta = X * beta + eta_domain[domain]; // linear predictor
+  target += dot_product(w, y .* eta - log1p_exp(eta));
+
+  // NPS likelihood (power prior) (vectorized)
+  vector[n_np] eta_np = X_np * beta + eta_domain[domain_np];
+  target += a * (y_np .* eta_np - log1p_exp(eta_np));
+}
+```
+
+# Import the model 
+
+```{r import-model}
+nps_prior_md_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_md.stan"),
+  cpp_options = list(stan_threads = TRUE)
+)
+
+nps_prior_pp_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_pp.stan"),
+  cpp_options = list(stan_threads = TRUE)
+)
+
+# R script which pre-processes data to feed into Stan
+# and post-processes Stan output
+source(here::here("code", "models", "nps_prior.R"))
+```
+
+This model requires some metadata to aggregate unit-level predictions to area-level:
+
+```{r helper-data}
+domain_levels <- sort(unique(c(as.character(ps_df$PUMA), as.character(nps_df$PUMA))))
+domain_ps <- match(ps_df$PUMA, domain_levels)
+domain_nps <- match(nps_df$PUMA, domain_levels)
+PUMA_levels <- domain_levels
+```
+
+We first calculate the power prior exponent:
+
+```{r pp-a}
+power_prior_a <- NULL
+if ("pp" %in% nps_prior_which) {
+  power_prior_a <- calculate_adaptive_power_prior_a(
+    y_ps = y_ps,
+    X_ps = X_ps,
+    y_nps = y_nps,
+    X_nps = X_nps,
+    verbose = TRUE
+  )$a
+}
+```
+
+# Results
+
+The original paper uses design weights as a covariate. To create weights for the NPS, we follow the authors in raking to population 
+benchmarks:
+
+```{r rak}
+# Raked weights for weight-as-covariate prior
+rake_vars <- c("AGEP_binned", "RAC1P", "SEX")
+pop_margins <- lapply(rake_vars, function(v) {
+  as.data.frame(table(acs_pop[[v]])) %>%
+    rename(!!v := Var1, Freq = Freq)
+})
+nps_design <- svydesign(ids = ~1, data = nps_df, weights = ~1)
+rake_formulas <- lapply(rake_vars, function(v) as.formula(paste0("~", v)))
+nps_raked_design <- rake(
+  design = nps_design,
+  sample.margins = rake_formulas,
+  population.margins = pop_margins
+)
+nps_rake_weights <- weights(nps_raked_design)
+nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
+```
+
+We then sample from the posterior distribution and aggregate to area-level predictions:
+
+```{r fit-rak, results = 'hide', message = FALSE, warning = FALSE}
+nps_prior_rak_res <- nps_prior_mcmc(
+  md_mod = nps_prior_md_mod,
+  pp_mod = nps_prior_pp_mod,
+  y = y_ps,
+  X = X_ps,
+  y_NP = y_nps,
+  X_NP = X_nps,
+  wts = NULL,
+  PUMA = factor(ps_df$PUMA, levels = domain_levels),
+  PUMA_levels = PUMA_levels,
+  raking_or_pl = "Raking",
+  typeIerr = alpha,
+  niter = mcmc_iter,
+  warmup = mcmc_burn,
+  chains = n_chains,
+  seed = curr_seed,
+  which_prior = nps_prior_which,
+  a = power_prior_a,
+  domain_ps = domain_ps,
+  domain_nps = domain_nps,
+  domain_levels = domain_levels,
+  weight_covariate = list(ps = ps_scale_weights, nps = nps_rake_weights),
+  scale_weight_covariate = scale_nps_prior_weight_covariate,
+  threads_per_chain = mcmc_threads_per_chain,
+  parallel_chains = n_chains
+)
+```
+
+```{r save-rak, include = FALSE}
+saveRDS(nps_prior_rak_res, here::here("data", "nps_prior_rak_res.RDS"))
+```
+
+We can also incorporate the design weights using a pseudolikelihood:
+
+```{r fit-pl, results = 'hide', message = FALSE, warning = FALSE}
+nps_prior_pl_res <- nps_prior_mcmc(
+  md_mod = nps_prior_md_mod,
+  pp_mod = nps_prior_pp_mod,
+  y = y_ps,
+  X = X_ps,
+  y_NP = y_nps,
+  X_NP = X_nps,
+  wts = ps_scale_weights,
+  PUMA = factor(ps_df$PUMA, levels = domain_levels),
+  PUMA_levels = PUMA_levels,
+  raking_or_pl = "Pseudolikelihood",
+  typeIerr = alpha,
+  niter = mcmc_iter,
+  warmup = mcmc_burn,
+  chains = n_chains,
+  seed = curr_seed,
+  which_prior = nps_prior_which,
+  a = power_prior_a,
+  domain_ps = domain_ps,
+  domain_nps = domain_nps,
+  domain_levels = domain_levels,
+  threads_per_chain = mcmc_threads_per_chain,
+  parallel_chains = n_chains
+)
+```
+
+```{r save-pl, include = FALSE}
+saveRDS(nps_prior_pl_res, here::here("data", "nps_prior_pl_res.RDS"))
+```
+
+# Performance Comparison
+
+## Calculate True Values and Direct Estimates
+
+```{r true-values}
+# Calculate true population values by PUMA (what we're trying to estimate)
+true_values <- acs_pop %>%
+  group_by(PUMA) %>%
+  summarize(
+    response_true = mean(PUBCOV, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r direct-estimates}
+# Create survey design
+samp.design <- svydesign(ids = ~1, weights = ~weights, data = ps_df)
+
+# svyby extraction: use built-in se to avoid manual column juggling
+direst <- svyby(
+  ~PUBCOV,
+  ~PUMA,
+  samp.design,
+  svymean,
+  na.rm = TRUE,
+  vartype = "se",
+  keep.names = FALSE
+) %>%
+  arrange(PUMA) %>%
+  transmute(
+    PUMA,
+    point_est = PUBCOV, # pulling the mean column from svyby
+    lower_CI = point_est + qnorm(alpha / 2) * se,
+    upper_CI = point_est + qnorm(1 - alpha / 2) * se,
+    model = "direst"
+  )
+```
+
+## Calculate Performance Metrics
+
+```{r performance-metrics}
+# Helper function for interval score (from main.R)
+int_score <- function(alpha, truth, L, U){
+  return(
+    (U - L) + 
+        2/alpha*(truth < L)*(L - truth) + 
+        2/alpha*(truth > U)*(truth - U)
+  )
+}
+
+# Combine your model results with direct estimates
+all_results <- bind_rows(
+    direst,
+    nps_prior_pl_res, 
+    nps_prior_rak_res
+)
+
+# Calculate performance metrics for all models
+performance_metrics <- true_values %>%
+  left_join(all_results, by = "PUMA") %>% 
+  mutate(model = ifelse(model=="direst", "baseline_HT", model)) %>% 
+  group_by(model) %>%
+  summarize(
+    MSE = mean((response_true - point_est)^2),
+    MAB = mean(abs(response_true - point_est)),
+    Coverage = mean(between(response_true, lower_CI, upper_CI)),
+    `Int. Score` = mean(int_score(alpha, response_true, lower_CI, upper_CI)),
+    .groups = "drop"
+  )
+
+performance_metrics
+```
+
+## Visualize Estimates vs Truth
+
+```{r visualize}
+# Plot estimates vs truth for direct estimates and NPS Prior Models
+ggplot(true_values %>% left_join(all_results, by = "PUMA"),
+       aes(x = response_true, y = point_est)) +
+  geom_point(alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  geom_errorbar(aes(ymin = lower_CI, ymax = upper_CI), alpha = 0.3) +
+  labs(
+    title = "Direct Estimates vs True PUMA Values",
+    x = "True PUBCOV Rate",
+    y = "Estimated PUBCOV Rate"
+  ) +
+  facet_wrap(~model) + 
+  theme_bw()
+
+ggsave("nps_prior_res.pdf", width = 12.4, height = 7)
+```
+
