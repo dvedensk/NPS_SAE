@@ -125,7 +125,9 @@ getMRP=function(MR=nps,
   nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
   nps_ca$SEX   <- factor(nps_ca$SEX)
   nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  PUMA_lev <- levels(factor(nps_ca$PUMA))  # lock PUMA levels
+  PUMA_lev <- sort(unique(c(as.character(nps_ca$PUMA),
+                            as.character(ps$PUMA),
+                            as.character(acs_pop$PUMA))))  # union across all datasets
   
   # fixed-effects design 
   X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
@@ -424,7 +426,9 @@ getMRP_INT <- function(MR,
   nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
   nps_ca$SEX   <- factor(nps_ca$SEX)
   nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  PUMA_lev     <- levels(factor(nps_ca$PUMA))  
+  PUMA_lev     <- sort(unique(c(as.character(nps_ca$PUMA),
+                                as.character(ps$PUMA),
+                                as.character(acs_pop$PUMA))))
   J            <- length(PUMA_lev) 
   
   # Fixed-effects design (no intercept; matches Stan)
