@@ -57,9 +57,12 @@ response_type <- "binary" # PUBCOV is 0/1 in processed population
 # PS sampling weight configuration (for PUBCOV: use WAGP=0.05, PWGTP=-0.2)
 PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 
-# NPS sampling weight configuration (for PUBCOV: use PWGTP=0.3, AGEP=0.7)
-# IMPORTANT: Increasing the weight on AGEP will uniformly increase DDC for PUBCOV
-NPS_weight_config <- list(PWGTP = 0.3, AGEP = 0.7)
+# NPS sampling weight configuration - POVPIP-based (avoids circularity with model covariates)
+# Empirically grounded scenarios (Pew Research 2023 benchmarking study):
+#   Extreme:   PWGTP=0.10, POVPIP=-1.52 → DDC=-0.089, ESS=6.6,   bias=-0.190 (worst opt-in error)
+#   Typical:   PWGTP=0.10, POVPIP=-0.41 → DDC=-0.029, ESS=63.9,  bias=-0.061 (avg opt-in error)
+#   Favorable: PWGTP=0.10, POVPIP=-0.22 → DDC=-0.014, ESS=254.6, bias=-0.030 (low-bias check)
+NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52)  # Extreme (default)
 
 # NPS prior configuration
 # Choose from: "pp", "md", "mdl", "mdl10"

@@ -62,22 +62,27 @@ get_PS <- function(pop_df,
 }
 
 # Non-Probability Sample (NPS)
-# Recommended samp_frac: 0.05 (5% → ~73,000 individuals, 10x larger than PS)
-# Default weights: PWGTP=0.3, AGEP=0.7 (for PUBCOV response)
-# These achieve DDC ≈ -0.076 with PUBCOV (strong selection bias for testing bias correction)
-# Coverage: 100% of 281 PUMAs (perfect domain coverage)
-# Effective sample size: ESS ≈ 5.2 (with actual n ≈ 73,000)
-# Alternative configs:
-#   - For stronger bias: PWGTP=0.2, AGEP=0.8 → DDC≈-0.093, ESS≈6
-#   - For extreme bias: PWGTP=0, AGEP=1.0 → DDC≈-0.123, ESS≈4
-#   - With internet_only=TRUE: DDC ≈ -0.0014 (realistic but weak bias)
-# See NPS_WEIGHT_SENSITIVITY.md for full trade-off analysis
+# Recommended samp_frac: 0.05 (5% → ~74,000 individuals, 10x larger than PS)
+# Default weights: PWGTP=0.10, POVPIP=-1.52 (Extreme scenario)
+#
+# Empirically-grounded scenarios (Pew Research 2023 benchmarking study):
+#   Extreme:   PWGTP=0.10, POVPIP=-1.52 → DDC=-0.089, ESS=6.6,  Bias=-19.0pp
+#   Typical:   PWGTP=0.10, POVPIP=-0.41 → DDC=-0.029, ESS=63.9, Bias=-6.1pp
+#   Favorable: PWGTP=0.10, POVPIP=-0.22 → DDC=-0.014, ESS=254.6, Bias=-3.0pp
+#
+# Empirical justification:
+#   - Extreme (19pp):   Worst documented opt-in error (Food Stamps, Pew pg. 29)
+#   - Typical (6pp):    Average opt-in error across benchmarks (5.8pp, Pew pg. 9)
+#   - Favorable (3pp):  Low-bias robustness check
+#
+# All scenarios maintain stable sample size (~74k) and 100% PUMA coverage.
+# See https://www.pewresearch.org/methods/2023/09/07/ for full report.
 #
 # weight_config: named list specifying weight variables and coefficients
-#   e.g., list(PWGTP = 0.3, AGEP = 0.7) or list(WAGP = 0.5)
+#   e.g., list(PWGTP = 0.10, POVPIP = -1.52) or list(WAGP = 0.5)
 get_NPS <- function(pop_df,
                     samp_frac = .05,
-                    weight_config = list(PWGTP = 0.3, AGEP = 0.7),
+                    weight_config = list(PWGTP = 0.10, POVPIP = -1.52),
                     internet_only = FALSE,
                     rescale_after_cap = FALSE) {
   if (internet_only) {
