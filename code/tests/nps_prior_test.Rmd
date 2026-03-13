@@ -284,7 +284,7 @@ transformed parameters {
 }
 
 model {
-  beta ~ normal(0, 9);
+  beta ~ normal(0, 3);
   sigma_domain ~ cauchy(0, 5);
   z_domain ~ normal(0, 1);
 
