@@ -110,7 +110,7 @@ y_i \mid \boldsymbol{\beta} \sim \text{Bernoulli}(\theta_i), \qquad
 so each likelihood contribution is 
 
 \[
-p(y_i \mid {\beta}) = \frac{\exp({x}_i'{\beta})^{y_i}}{[1 + \exp({x}_i'{\beta})]}
+p(y_i \mid \boldsymbol{\beta}) = \frac{\exp(\mathbf{x}_i'\boldsymbol{\beta})^{y_i}}{[1 + \exp(\mathbf{x}_i'\boldsymbol{\beta})]}
 \]
 
 ## Pseudolikelihood
@@ -119,7 +119,7 @@ Given weights $w_1, \ldots, w_n$ equal to the inverse probabilities of selection
 size $n$, we exponentiate the likelihood contributions as 
 
 \[
-\tilde{p}(y_i \mid {\beta}) = \frac{\exp({x}_i'{\beta})^{w_i y_i}}{[1 + \exp({x}_i'{\beta})]^{w_i}}
+\tilde{p}(y_i \mid \boldsymbol{\beta}) = \frac{\exp(\mathbf{x}_i'\boldsymbol{\beta})^{w_i y_i}}{[1 + \exp(\mathbf{x}_i'\boldsymbol{\beta})]^{w_i}}
 \]
 
 A likelihood-based model is recovered by setting each weight to 1.
@@ -137,16 +137,16 @@ The general form is
 We target the log posterior
 
 \[
-\log p(\beta \mid \cdot) =
-\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\log p(\boldsymbol{\beta} \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(\mathbf{x}_i'\boldsymbol{\beta})\right)
 \, + \,
-\log \mathcal{N}(\hat{\boldsymbol{\beta}}_{NPS}, \operatorname{diag}(\sigma_1^2,\ldots,\sigma_p^2)).
+\log \mathcal{N}(\boldsymbol{\beta} \mid \hat{\boldsymbol{\beta}}_{NPS}, \operatorname{diag}(\sigma_1^2,\ldots,\sigma_p^2)).
 \]
 
 Equivalently, using the logit link, the log-likelihood terms are
 
 \[
-\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\}
+\log p(y_i \mid \boldsymbol{\beta}) = y_i (\mathbf{x}_i'\boldsymbol{\beta}) - \log\{1 + \exp(\mathbf{x}_i'\boldsymbol{\beta})\}
 \]
 
 ```{stanmodel, eval = FALSE}
@@ -195,7 +195,7 @@ We fit this model for each of the three following variations on the mixed-distan
 ### Mixed-Distance
 
 \[
-\sigma_j = |\hat{\beta}_{PS,j} - \hat{\beta}_{NPS,j}|.
+\sigma_j = |\hat{{\beta}}_{PS,j} - \hat{{\beta}}_{NPS,j}|.
 \]
 
 ### Mixed-Distance-log
@@ -213,21 +213,22 @@ We fit this model for each of the three following variations on the mixed-distan
 
 ## Power Prior
 
-A power prior on $\beta$ is
+A power prior on $\boldsymbol{\beta}$ is
 
 \[
-p(\beta \mid \tilde{y}, \tilde{X}) \propto L(\beta \mid \tilde{y},\tilde{X})^a \, p(\beta),
+p(\boldsymbol{\beta} \mid \tilde{\mathbf{y}}, \tilde{\mathbf{X}}) \propto L(\boldsymbol{\beta} \mid \tilde{\mathbf{y}},\tilde{\mathbf{X}})^a \, p(\boldsymbol{\beta}),
 \]
 
 with a fixed exponent \(a\). The authors set \(a\) equal to the \(p\)-value resulting from a 
-Hotelling \(T^2\) test of equality between \(\hat{\beta}_{PS}\) and \(\hat{\beta}_{NPS}\). They also 
-place a \(t_3(0, 2.5)\) prior on each coefficient, resulting in the 
+Hotelling \(T^2\) test of equality between \(\hat{\boldsymbol{\beta}}_{PS}\) and \(\hat{\boldsymbol{\beta}}_{NPS}\). We adjust their prior on \(\boldsymbol{\beta}\) to 
+align with a standard Bayesian unit-level model
+place a \(\mathcal{N}(0, 9)\) prior on each coefficient, resulting in the 
 posterior distribution
 \[
-p(\beta \mid \text{data}) \propto 
-\left\{ \prod_{i = 1}^n \frac{\exp({x}_i'{\beta})^{w_i y_i}}{[1 + \exp({x}_i'{\beta})]^{w_i}}  \right\}
-\left\{ \prod_{\ell = 1}^{\tilde{n}} \frac{\exp(\tilde{x}_\ell'{\beta})^{a \tilde{y}_\ell}}{[1 + \exp(\tilde{x}_\ell'{\beta})]^{a}} \right\} 
-\left\{\prod_{j=1}^p t_3(\beta_j \mid 0, 2.5)\right\}
+p(\boldsymbol{\beta} \mid \text{data}) \propto 
+\left\{ \prod_{i = 1}^n \frac{\exp(\mathbf{x}_i'{\boldsymbol{\beta}})^{w_i y_i}}{[1 + \exp(\mathbf{x}_i'{\boldsymbol{\beta}})]^{w_i}}  \right\}
+\left\{ \prod_{\ell = 1}^{\tilde{n}} \frac{\exp(\tilde{\mathbf{x}}_\ell'{\boldsymbol{\beta}})^{a \tilde{y}_\ell}}{[1 + \exp(\tilde{\mathbf{x}}_\ell'{\boldsymbol{\beta}})]^{a}} \right\} 
+\left\{\prod_{j=1}^p \mathcal{N}(\beta_j \mid 0, 9)\right\}
 \]
 
 ### HMC Implementation 
@@ -235,20 +236,20 @@ p(\beta \mid \text{data}) \propto
 In the Stan implementation, we target the following log posterior:
 
 \[
-\log p(\beta \mid \cdot) =
-\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(x_i'\beta)\right)
+\log p(\boldsymbol{\beta} \mid \cdot) =
+\sum_{i=1}^{n} w_i \log \text{Bernoulli}\left(y_i \mid \text{logit}^{-1}(\mathbf{x}_i'\boldsymbol{\beta})\right)
 \, + \,
-a \sum_{\ell=1}^{\tilde{n}} \log \text{Bernoulli}\left(\tilde{y}_\ell \mid \text{logit}^{-1}(\tilde{x}_\ell'\beta)\right)
+a \sum_{\ell=1}^{\tilde{n}} \log \text{Bernoulli}\left(\tilde{y}_\ell \mid \text{logit}^{-1}(\tilde{\mathbf{x}}_\ell'\boldsymbol{\beta})\right)
 \, + \,
-\sum_{j=1}^{p} \log t_3(\beta_j \mid 0, 2.5).
+\sum_{j=1}^{p} \log \mathcal{N}(\beta_j \mid 0, 9).
 \]
 
 Equivalently, using the logit link, the log-likelihood terms are
 
 \[
-\log p(y_i \mid \beta) = y_i (x_i'\beta) - \log\{1 + \exp(x_i'\beta)\},
+\log p(y_i \mid \boldsymbol{\beta}) = y_i (\mathbf{x}_i'\boldsymbol{\beta}) - \log\{1 + \exp(\mathbf{x}_i'\boldsymbol{\beta})\},
 \qquad
-\log p(\tilde{y}_\ell \mid \beta) = \tilde{y}_\ell (\tilde{x}_\ell'\beta) - \log\{1 + \exp(\tilde{x}_\ell'\beta)\}.
+\log p(\tilde{y}_\ell \mid \boldsymbol{\beta}) = \tilde{y}_\ell (\tilde{\mathbf{x}}_\ell'\boldsymbol{\beta}) - \log\{1 + \exp(\tilde{\mathbf{x}}_\ell'\boldsymbol{\beta})\}.
 \]
 
 ```{stanmodel, eval = FALSE}
@@ -283,9 +284,8 @@ transformed parameters {
 }
 
 model {
-  // Prior: t_3(0, 2.5)
-  beta ~ student_t(3, 0, 2.5);
-  sigma_domain ~ normal(0, 1);
+  beta ~ normal(0, 9);
+  sigma_domain ~ cauchy(0, 5);
   z_domain ~ normal(0, 1);
 
   // PS pseudolikelihood (vectorized)
