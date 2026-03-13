@@ -29,8 +29,7 @@ transformed parameters {
 }
 
 model {
-  // Prior: t_3(0, 2.5)
-  beta ~ student_t(3, 0, 2.5);
+  beta ~ normal(0, 9);
   sigma_domain ~ cauchy(0, 5);
   z_domain ~ normal(0, 1);
 
