@@ -181,7 +181,7 @@ transformed parameters {
 model {
   // Prior
   beta ~ normal(beta_prior_mean, beta_prior_sd);
-  sigma_domain ~ normal(0, 1);
+  sigma_domain ~ cauchy(0, 5);
   z_domain ~ normal(0, 1);
 
   // Pseudolikelihood (only PS) (vectorized)
