@@ -29,9 +29,8 @@ transformed parameters {
 }
 
 model {
-  // Prior: t_3(0, 2.5)
-  beta ~ student_t(3, 0, 2.5);
-  sigma_domain ~ normal(0, 1);
+  beta ~ normal(0, 3);
+  sigma_domain ~ cauchy(0, 5);
   z_domain ~ normal(0, 1);
 
   // PS pseudolikelihood (vectorized)
