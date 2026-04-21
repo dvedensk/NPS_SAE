@@ -18,7 +18,7 @@ tryCatch(
 
 source(file.path("code", "sampling_functions.R"))
 source(file.path("code", "utils.R")) # utils.R must define estimate_ipw()
-source(file.path("code", "nps_prior.R")) # NPS prior helper functions
+source(file.path("code", "models", "nps_prior.R")) # NPS prior helper functions
 source(file.path("code", "models", "bulm.R"))
 source(file.path("code", "models", "VSW.R"))
 
@@ -295,6 +295,7 @@ for (sim in 1:Nsim) {
     MR = nps,
     ps = ps,
     acs_pop = acs_pop,
+    mod = mod,
     bootstrap = TRUE, # Bootstrap needed for MRP-R uncertainty (not for MRP-P)
     L = 100,
     seed = curr_seed,
@@ -324,6 +325,27 @@ for (sim in 1:Nsim) {
   mrpint_r <- mrp1$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpint_p <- mrp1$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
 
+  
+  # 4.3 MRP-INT with PUBCOV in selection model (MRP-INT-R and MRP-INT-P)
+  mrp_pubcov_out <- getMRP_INT(
+    MR = nps,
+    ps = ps,
+    acs_pop = acs_pop,
+    mod = modINT,
+    include_response = TRUE,
+    bootstrap = TRUE,
+    L = 100,
+    adjust = TRUE,
+    seed = curr_seed,
+    n_chains = n_chains,
+    stan_iter = mcmc_iter,
+    stan_warmup = mcmc_burn,
+    threads = mcmc_threads_per_chain
+  )
+  mrpint_r_pubcov <- mrp_pubcov_out$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
+  mrpint_p_pubcov <- mrp_pubcov_out$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
+  
+  
   # ============================================================
   # METHOD 5: VSW METHOD
   # ============================================================
@@ -434,6 +456,8 @@ for (sim in 1:Nsim) {
     mrpp, # METHOD 4.1
     mrpint_r, # METHOD 4.2
     mrpint_p, # METHOD 4.2
+    mrpint_r_pubcov, # METHOD 4.3
+    mrpint_p_pubcov, # METHOD 4.3
     VSW_out, # METHOD 5
     nps_prior_pl_res, # METHOD 6a
     nps_prior_rak_res # METHOD 6b

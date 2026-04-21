@@ -30,7 +30,7 @@ data {
   int<lower=1> grainsize;
 
   // prior scales for each coefficient
-  vector<lower=0>[k] beta_scale;
+ // vector<lower=0>[k] beta_scale;
   
   
     // PUMA indexing
@@ -54,10 +54,10 @@ transformed parameters {
 }
 
 model {
-  beta ~ normal(0, beta_scale);
+  beta ~ normal(0, 3);
   z_puma ~ normal(0, 1);
-  sigma_puma ~ student_t(3, 0, 2.5); 
-
+ sigma_puma ~ cauchy(0, 5);  
+ 
   // Likelihood
   target += reduce_sum(bern_glm_ll_slice,
     y, grainsize,

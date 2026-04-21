@@ -97,55 +97,41 @@ make_summary <- function(draw_mat, puma_names, tag) {
 }
 
 
-# ---------- 5) getMRP----------
-#
-# Bootstrap: Use bootstrap=TRUE for proper coverage (~95% vs ~52%). Captures both
-# posterior and sampling uncertainty. L=100 recommended.
-#
-getMRP=function(MR=nps,
-                ps=ps,
-                acs_pop=acs_pop,
-                bootstrap=FALSE,
-                L=100,
-                threads=4,
-                n_chains=2,
-                seed=NULL,
-                stan_iter=1000,
-                stan_warmup=500){
 
-  # Validate L parameter
+# ---------- 5b) getMRP_new (no data-dependent prior; beta ~ N(0,3)) ----------
+# Same structure as getMRP, but DOES NOT compute beta_scale or pass it to Stan.
+# Relies on si2.stan having fixed N(0,3) priors for beta.
+getMRP<- function(MR,
+                       ps,
+                       acs_pop,
+                       mod,
+                       bootstrap = FALSE,
+                       L = 100,
+                       threads = 4,
+                       n_chains = 2,
+                       seed = NULL,
+                       stan_iter = 1000,
+                       stan_warmup = 500) {
+  
   if (bootstrap && (is.null(L) || L < 1)) {
     stop("L must be specified and >= 1 when bootstrap=TRUE")
   }
-
-  # TRAINING DATA ----
-  nps_ca <- MR  # nps
   
-  # lock factor levels from training
-  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
-  nps_ca$SEX   <- factor(nps_ca$SEX)
-  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
+  # TRAINING DATA ----
+  nps_ca <- MR
+  nps_ca$AGEP_binned <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX        <- factor(nps_ca$SEX)
+  nps_ca$RAC1P      <- factor(nps_ca$RAC1P)
   PUMA_lev <- sort(unique(c(as.character(nps_ca$PUMA),
                             as.character(ps$PUMA),
-                            as.character(acs_pop$PUMA))))  # union across all datasets
+                            as.character(acs_pop$PUMA))))
   
-  # fixed-effects design 
   X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
   k <- ncol(X_train)
   n <- nrow(X_train)
   y <- as.integer(nps_ca$PUBCOV)
-
-
-  #threads <- 4
-  grainsize=as.integer(n / (threads))
-
-  #  data dependent prior for beta
-  sd_y <- stats::sd(as.numeric(y))
-  sd_x <- apply(X_train, 2, stats::sd)
-  sd_x[sd_x == 0] <- NA_real_   # or small number
-  beta_scale <- 2.5 * sd_y / sd_x
   
-  
+  grainsize <- as.integer(n / threads)
   puma_id <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
   J <- length(PUMA_lev)
   
@@ -156,11 +142,9 @@ getMRP=function(MR=nps,
     y = y,
     J = J,
     puma_id = puma_id,
-    grainsize = grainsize,
-    beta_scale = as.vector(beta_scale)
+    grainsize = grainsize
   )
   
-
   sample_args <- list(
     data = stan_data,
     chains = n_chains,
@@ -172,118 +156,86 @@ getMRP=function(MR=nps,
   if (!is.null(seed)) sample_args$seed <- seed
   
   fit <- do.call(mod$sample, sample_args)
-  
   sum_tbl <- fit$summary()
-  
-  
-  # fit_glm <- rstanarm::stan_glm( #stan_glmer
-  #   PUBCOV ~ 0 + AGEP_binned + SEX + RAC1P+ WAGP+ACCESSINET, #(1|PUMA)
-  #   data   = nps_ca,
-  #   family = binomial(link = "logit"),
-  #   chains = 2,
-  #   iter   = 1500,
-  #   warmup = 500,
-  #   cores  = 2,
-  #   seed   = 123
-  # )
 
-  
-  # TRAINING ref (to lock levels & PUMA order)
-  nps_ca <- MR
-  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
-  nps_ca$SEX   <- factor(nps_ca$SEX)
-  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  PUMA_lev     <- levels(factor(nps_ca$PUMA))
-  J            <- length(PUMA_lev)
-  
-  # Collapse Ps and Pop to cells (huge speed/memory win)
+  # Collapse PS and Pop to cells
   ps_cells  <- collapse_to_cells(ps,      nps_ca, PUMA_lev, weight_col = "weights")
   pop_cells <- collapse_to_cells(acs_pop, nps_ca, PUMA_lev, weight_col = "weights")
   
-  beta <- get_beta_draws(fit)   
+  beta <- get_beta_draws(fit)
   apuma_draws <- get_apuma_draws(fit)
   
-  mu_ps_draws  <- if (nrow(ps_cells$Xp)  > 0)
-    poststrat_SxJ(beta=beta,
-                  a_puma=apuma_draws,
-                  Xp=ps_cells$Xp,
-                  g=ps_cells$g,
-                  w=ps_cells$w,
-                  J=J) else
-      matrix(NA_real_, nrow = nrow(beta), ncol = J)
-
-  mu_pop_draws <- if (nrow(pop_cells$Xp) > 0)
-    poststrat_SxJ(beta=beta,
-                  a_puma=apuma_draws,
-                  Xp=pop_cells$Xp,
-                  g=pop_cells$g,
-                  w=pop_cells$w,
-                  J=J) else
-                    matrix(NA_real_, nrow = nrow(beta), ncol = J)
-  
-
-  puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-r")
-  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
-
-
-  if (bootstrap) {
-    # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
-    S <- nrow(beta)
-    mu_boot_array <- array(NA_real_, dim = c(S, J, L))
-
-    cat("\nGenerating", L, "bootstrap samples...\n")
-    system.time({
-      for (l in 1:L) {
-        # Generate bootstrap sample l using simple weighted bootstrap
-        # (much faster than MSIMST::WFPBB which fits a Bayesian model)
-        boot_idx <- sample(
-          1:nrow(ps),
-          size = nrow(ps),
-          replace = TRUE,
-          prob = ps$weights
-        )
-
-        # Resample THIS bootstrap replicate
-        ps_boot <- ps[boot_idx, ]
-
-        # Collapse THIS bootstrap sample to cells
-        ps_boot_cells <- collapse_to_cells(ps_boot, nps_ca, PUMA_lev, weight_col = "weights")
-
-        # Poststratify THIS bootstrap sample
-        mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
-          poststrat_SxJ(beta=beta,
-                        a_puma=apuma_draws,
-                        Xp=ps_boot_cells$Xp,
-                        g=ps_boot_cells$g,
-                        w=ps_boot_cells$w,
-                        J=J) else
-                          matrix(NA_real_, nrow = S, ncol = J)
-
-        if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
-      }
-    })
-
-    # Flatten S × J × L into (S*L) × J to capture both uncertainties
-    # aperm(mu_boot_array, c(3, 1, 2)) reorders dimensions from (S, J, L) to (L, S, J)
-    # matrix(..., nrow = S*L, ncol = J) then stacks all L bootstrap replicates vertically,
-    # so make_summary() treats all (S*L) rows identically when computing quantiles across
-    # both posterior draws (S) and bootstrap replicates (L)
-    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
-    puma_summary_mrpr_bootstrap <- make_summary(mu_combined,  PUMA_lev, "mrp-r-bootstrap")
-
-
+  mu_ps_draws <- if (nrow(ps_cells$Xp) > 0) {
+    poststrat_SxJ(
+      beta = beta,
+      a_puma = apuma_draws,
+      Xp = ps_cells$Xp,
+      g = ps_cells$g,
+      w = ps_cells$w,
+      J = J
+    )
   } else {
-    puma_summary_mrpr_bootstrap=NULL
+    matrix(NA_real_, nrow = nrow(beta), ncol = J)
   }
   
+  mu_pop_draws <- if (nrow(pop_cells$Xp) > 0) {
+    poststrat_SxJ(
+      beta = beta,
+      a_puma = apuma_draws,
+      Xp = pop_cells$Xp,
+      g = pop_cells$g,
+      w = pop_cells$w,
+      J = J
+    )
+  } else {
+    matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  }
   
-  return(list(
-    puma_summary_mrpr=puma_summary_mrpr,
-    puma_summary_mrpp=puma_summary_mrpp,
-    puma_summary_mrpr_bootstrap=puma_summary_mrpr_bootstrap,
-    rhat=sum_tbl$rhat
-  ))
+  puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev, "mrp-r")
+  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p")
   
+  puma_summary_mrpr_bootstrap <- NULL
+  if (bootstrap) {
+    S <- nrow(beta)
+    mu_boot_array <- array(NA_real_, dim = c(S, J, L))
+    cat("\nGenerating", L, "bootstrap samples for getMRP_new...\n")
+    for (l in 1:L) {
+      boot_idx <- sample(
+        seq_len(nrow(ps)),
+        size = nrow(ps),
+        replace = TRUE,
+        prob = ps$weights
+      )
+      ps_boot <- ps[boot_idx, ]
+      ps_boot_cells <- collapse_to_cells(ps_boot, nps_ca, PUMA_lev, weight_col = "weights")
+      mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0) {
+        poststrat_SxJ(
+          beta = beta,
+          a_puma = apuma_draws,
+          Xp = ps_boot_cells$Xp,
+          g = ps_boot_cells$g,
+          w = ps_boot_cells$w,
+          J = J
+        )
+      } else {
+        matrix(NA_real_, nrow = S, ncol = J)
+      }
+      if (l %% 10 == 0) {
+        cat("  Completed", l, "of", L, "bootstrap samples\n")
+      }
+    }
+    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S * L, ncol = J)
+    puma_summary_mrpr_bootstrap <- make_summary(
+      mu_combined, PUMA_lev, "mrp-r-bootstrap"
+    )
+  }
+  
+  list(
+    puma_summary_mrpr = puma_summary_mrpr,
+    puma_summary_mrpp = puma_summary_mrpp,
+    puma_summary_mrpr_bootstrap = puma_summary_mrpr_bootstrap,
+    rhat = sum_tbl$rhat
+  )
 }
 
 ## MRP_INT
@@ -310,6 +262,7 @@ collapse_to_cells_int <- function(df, train_ref, PUMA_lev,
                                   design_formula = ~ 0 + AGEP_binned + SEX + RAC1P,
                                   weight_col = NULL,
                                   bin_map = bin_map,
+                                  bin_digits = 2,
                                   map_bins = function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])) {
   
   df <- .align_to_train(df, train_ref, PUMA_lev)
@@ -338,7 +291,7 @@ collapse_to_cells_int <- function(df, train_ref, PUMA_lev,
   cells$PUMA <- factor(cells$PUMA, levels = PUMA_lev)
   
   # recompute bins from cell-mean psi (your logic)
-  cells$psi_bin <- map_bins(bin_fun(cells$psi,digits = 2))
+  cells$psi_bin <- map_bins(bin_fun(cells$psi, digits = bin_digits))
   
   Xp <- model.matrix(design_formula, data = cells)
   g  <- as.integer(cells$PUMA)
@@ -390,209 +343,235 @@ poststrat_int_SxJ <- function(beta, beta_psi, zeta, a_puma,
 }
 
 
+# ---------- 3b) Cell-level inclusion probability (external step) ----------
+# Returns one psi per unique (AGEP_binned, SEX, RAC1P, PUMA). Optional cell_psi.
+# include_response = TRUE adds PUBCOV to the selection formula; population psi is
+# then marginalized over PUBCOV proportions from acs_pop.
+compute_cell_inclusion_probs <- function(ps,
+                                         nps,
+                                         train_ref,
+                                         PUMA_lev,
+                                         acs_pop = NULL,
+                                         cell_psi = NULL,
+                                         psi_eps = 1e-6,
+                                         bin_digits = 2,
+                                         adjust = FALSE,
+                                         include_response = FALSE) {
+  base_cols <- c("AGEP_binned", "SEX", "RAC1P", "PUMA")
+  sel_cols  <- if (include_response) c(base_cols, "PUBCOV") else base_cols
+  align_lev <- function(df) {
+    df$AGEP_binned <- factor(df$AGEP_binned, levels = levels(train_ref$AGEP_binned))
+    df$SEX         <- factor(df$SEX,         levels = levels(train_ref$SEX))
+    df$RAC1P       <- factor(df$RAC1P,       levels = levels(train_ref$RAC1P))
+    df$PUMA        <- factor(df$PUMA,        levels = PUMA_lev)
+    if (include_response && "PUBCOV" %in% names(df))
+      df$PUBCOV <- factor(as.character(df$PUBCOV), levels = c("0", "1"))
+    df
+  }
+  if (!is.null(cell_psi)) {
+    cells <- align_lev(cell_psi[, c(base_cols, "psi")])
+    cells$psi <- pmin(pmax(cells$psi, psi_eps), 1 - psi_eps)
+    cells$bin_val <- bin_fun(cells$psi, digits = bin_digits)
+    return(list(cells_nps = cells, cells_ps = cells, cells_pop = cells))
+  }
+  if (include_response && (!"PUBCOV" %in% names(train_ref) || !"PUBCOV" %in% names(ps)))
+    stop("include_response = TRUE requires PUBCOV in both NPS and PS data.")
+  sel_MR <- train_ref[, sel_cols]
+  sel_MR$S <- 1L
+  sel_ps  <- ps[, c(sel_cols, "weights")]
+  sel_ps$S <- 0L
+  sel_MR <- align_lev(sel_MR)
+  sel_ps <- align_lev(sel_ps)
+  if (adjust) {
+    N_hat <- sum(sel_ps$weights)
+    n_np  <- nrow(sel_MR)
+    sel_ps$weights <- sel_ps$weights * (N_hat - n_np) / N_hat
+  }
+  sel_dat <- dplyr::bind_rows(
+    dplyr::mutate(sel_MR[, c(sel_cols, "S")], weights = 1),
+    sel_ps[, c(sel_cols, "S", "weights")]
+  )
+  sel_formula <- if (include_response)
+    S ~ AGEP_binned + SEX + RAC1P + PUBCOV
+  else
+    S ~ AGEP_binned + SEX + RAC1P + PUMA
+  sel_fit <- stats::glm(sel_formula, data = sel_dat, family = binomial(),
+                        weights = sel_dat$weights)
+  if (include_response) {
+    # Per-individual psi averaged to cell level (marginalizes over observed PUBCOV)
+    nps_unit <- align_lev(train_ref[, sel_cols])
+    nps_unit$psi_unit <- pmin(pmax(
+      stats::predict(sel_fit, newdata = nps_unit, type = "response"), psi_eps), 1 - psi_eps)
+    cells_nps <- nps_unit %>%
+      dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) %>%
+      dplyr::summarise(psi = mean(psi_unit, na.rm = TRUE), .groups = "drop")
+    ps_unit <- align_lev(ps[, sel_cols])
+    ps_unit$psi_unit <- pmin(pmax(
+      stats::predict(sel_fit, newdata = ps_unit, type = "response"), psi_eps), 1 - psi_eps)
+    cells_ps <- ps_unit %>%
+      dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) %>%
+      dplyr::summarise(psi = mean(psi_unit, na.rm = TRUE), .groups = "drop")
+    cells_pop <- NULL
+    if (!is.null(acs_pop) && nrow(acs_pop) > 0 && "PUBCOV" %in% names(acs_pop)) {
+      acs_lev <- .align_to_train(acs_pop, train_ref, PUMA_lev)
+      acs_lev$PUBCOV <- factor(as.character(acs_lev$PUBCOV), levels = c("0", "1"))
+      cell_prop <- acs_lev %>%
+        dplyr::group_by(AGEP_binned, SEX, RAC1P, PUMA) %>%
+        dplyr::summarise(n = dplyr::n(), n1 = sum(PUBCOV == "1", na.rm = TRUE), .groups = "drop") %>%
+        dplyr::mutate(prop1 = n1 / n)
+      cells_grid <- align_lev(cell_prop[, base_cols])
+      cells_grid$PUBCOV <- factor("0", levels = c("0", "1"))
+      psi0 <- pmin(pmax(stats::predict(sel_fit, newdata = cells_grid, type = "response"), psi_eps), 1 - psi_eps)
+      cells_grid$PUBCOV <- factor("1", levels = c("0", "1"))
+      psi1 <- pmin(pmax(stats::predict(sel_fit, newdata = cells_grid, type = "response"), psi_eps), 1 - psi_eps)
+      cells_pop <- cell_prop %>%
+        dplyr::mutate(psi = as.numeric((1 - prop1) * psi0 + prop1 * psi1))
+      cells_pop <- align_lev(cells_pop[, c(base_cols, "psi")])
+    }
+  } else {
+    cells_nps <- dplyr::distinct(train_ref[, base_cols])
+    cells_ps  <- dplyr::distinct(ps[, base_cols])
+    cells     <- dplyr::distinct(dplyr::bind_rows(cells_nps, cells_ps))
+    if (!is.null(acs_pop) && nrow(acs_pop) > 0) {
+      acs_lev <- .align_to_train(acs_pop, train_ref, PUMA_lev)
+      cells_acs <- dplyr::distinct(acs_lev[, base_cols])
+      cells <- dplyr::distinct(dplyr::bind_rows(cells, cells_acs))
+    }
+    cells <- align_lev(cells)
+    p <- stats::predict(sel_fit, newdata = cells, type = "response")
+    p <- pmin(pmax(p, psi_eps), 1 - psi_eps)
+    cells$psi <- as.numeric(p)
+    cells_nps <- cells
+    cells_ps  <- cells
+    cells_pop <- cells
+  }
+  cells_nps$bin_val <- bin_fun(cells_nps$psi, digits = bin_digits)
+  cells_ps$bin_val  <- bin_fun(cells_ps$psi,  digits = bin_digits)
+  if (!is.null(cells_pop)) cells_pop$bin_val <- bin_fun(cells_pop$psi, digits = bin_digits)
+  list(cells_nps = cells_nps, cells_ps = cells_ps, cells_pop = cells_pop)
+}
 
-# ---------- 4) getMRP_INT----------
-#
-# Bootstrap: Use bootstrap=TRUE for proper coverage (~95% vs ~52%). Captures both
-# posterior and sampling uncertainty. L=100 recommended.
-#
+
+
+
+# ---------- 4b) getMRP_INT_new (cell-level psi ) ----------
 getMRP_INT <- function(MR,
                        ps,
                        acs_pop,
-                       mod = mod,
-                       adjust=TRUE,
-                       bootstrap=FALSE,
-                       L=100,
-                       threads=4,
-                       n_chains=2,
-                       seed=NULL,
-                       stan_iter=1000,
-                       stan_warmup=500
-) {
-
-  # Validate L parameter
-  if (bootstrap && (is.null(L) || L < 1)) {
-    stop("L must be specified and >= 1 when bootstrap=TRUE")
-  }
-  
-  
-  # ps$PWGTP<-ps$weights
-  
-  
-  psi_eps = 1e-6
-  
-  ## 0) LOCK LEVELS FROM TRAINING --------------------------------------------
+                       mod,
+                       cell_psi = NULL,
+                       include_response = FALSE,
+                       bootstrap = FALSE,
+                       L = 100,
+                       threads = 4,
+                       n_chains = 2,
+                       seed = NULL,
+                       stan_iter = 1000,
+                       stan_warmup = 500,
+                       adjust = FALSE,
+                       psi_eps = 1e-6,
+                       bin_digits = 2) {
+  if (bootstrap && (is.null(L) || L < 1)) stop("L must be specified and >= 1 when bootstrap=TRUE")
   nps_ca <- MR
-  nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
-  nps_ca$SEX   <- factor(nps_ca$SEX)
-  nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  PUMA_lev     <- sort(unique(c(as.character(nps_ca$PUMA),
-                                as.character(ps$PUMA),
-                                as.character(acs_pop$PUMA))))
-  J            <- length(PUMA_lev) 
-  
-  # Fixed-effects design (no intercept; matches Stan)
+  nps_ca$AGEP_binned <- factor(nps_ca$AGEP_binned)
+  nps_ca$SEX        <- factor(nps_ca$SEX)
+  nps_ca$RAC1P      <- factor(nps_ca$RAC1P)
+  PUMA_lev <- sort(unique(c(
+    as.character(nps_ca$PUMA),
+    as.character(ps$PUMA),
+    as.character(acs_pop$PUMA)
+  )))
+  J <- length(PUMA_lev)
   X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
   k <- ncol(X_train)
   n <- nrow(X_train)
   y <- as.integer(nps_ca$PUBCOV)
-  
-  
-  
-  ## 1) SELECTION MODEL --------------------------------------------
-  # Build a clean selection dataset with shared covariates
-  sel_MR <- nps_ca[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")]
-  sel_MR$S <- 1L
-  sel_ps <- ps[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "weights")]
-  sel_ps$S <- 0L
-  
-  # Align factor levels to training for selection model too
-  align_levels <- function(df) {
-    df$AGEP  <- factor(df$AGEP_binned,  levels = levels(nps_ca$AGEP_binned))
-    df$SEX   <- factor(df$SEX,   levels = levels(nps_ca$SEX))
-    df$RAC1P <- factor(df$RAC1P, levels = levels(nps_ca$RAC1P))
-    df$PUMA  <- factor(df$PUMA,  levels = PUMA_lev)
-    df
-  }
-  sel_MR <- align_levels(sel_MR)
-  sel_ps <- align_levels(sel_ps)
-  
-  sel_dat <- rbind(
-    cbind(sel_MR, weights = 1),
-    sel_ps
+  train_ref <- nps_ca
+  cells_psi <- compute_cell_inclusion_probs(
+    ps = ps, nps = nps_ca, train_ref = train_ref, PUMA_lev = PUMA_lev,
+    acs_pop = acs_pop, cell_psi = cell_psi, psi_eps = psi_eps, bin_digits = bin_digits,
+    adjust = adjust, include_response = include_response
   )
-  
-  if(adjust==TRUE){
-    ## 1) Estimated population size from PS
-    N_hat <- sum(sel_ps$weights)
-    ## 2) Size of nonprobability sample
-    n_np <- nrow(sel_MR)
-    ## 3) Adjustment factor
-    adj_factor <- (N_hat - n_np) / N_hat
-    ## 4) Adjust PS weights
-    sel_ps$weights <- sel_ps$weights * adj_factor
-    sel_MR$weights=1
-    sel_dat <- rbind(
-      sel_MR[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")],
-      sel_ps[, c("AGEP_binned","SEX","RAC1P","PUMA","S","weights")]
-    ) 
-  } else {
-    adj_factor=NULL
+  cells_nps <- cells_psi$cells_nps
+  cells_ps  <- cells_psi$cells_ps
+  cells_pop <- cells_psi$cells_pop
+  if (is.null(cells_pop) && !is.null(acs_pop) && nrow(acs_pop) > 0) {
+    if (isTRUE(include_response)) {
+      stop(
+        "include_response = TRUE requires acs_pop with PUBCOV so population ",
+        "PUBCOV composition can be marginalized."
+      )
+    }
+    cells_pop <- cells_nps
   }
-  
-  sel_fit <- stats::glm(
-    S ~ AGEP_binned + SEX + RAC1P, 
-    data = sel_dat,
-    family = binomial(),
-    weights = sel_dat$weights
-  )
-  
-  #bin_val is 0.11, 0.12, etc, psi is the predicted psi, using bin_val represents the random-effect group which is used during poststratification.
-  predict_psi <- function(df) {
-    if (is.null(df) || nrow(df) == 0) return(list(psi = numeric(0), psi_bin = integer(0)))
-    df2 <- align_levels(df)
-    p <- stats::predict(sel_fit, newdata = df2, type = "response")
-    p <- pmin(pmax(p, psi_eps), 1 - psi_eps)#to avoid 0
-    list(psi = as.numeric(p), bin_val = bin_fun(p,digits = 2))
-  }
-  
-  psi_train <- predict_psi(nps_ca)
-  psi_ps    <- predict_psi(ps)
-  psi_pop   <- predict_psi(acs_pop)
-  
-  # Build a consistent bin map across ALL datasets
-  all_bin_vals <- unique(c(psi_train$bin_val, psi_ps$bin_val, psi_pop$bin_val))
-  all_bin_vals <- sort(unique(all_bin_vals))
+  all_bin_vals <- sort(unique(c(
+    cells_nps$bin_val,
+    cells_ps$bin_val,
+    if (!is.null(cells_pop)) cells_pop$bin_val else NULL
+  )))
   G <- length(all_bin_vals)
-  
-  
-  bin_map <- setNames(seq_along(all_bin_vals), all_bin_vals)
+  bin_map <- setNames(seq_along(all_bin_vals), as.character(all_bin_vals))
   map_bins <- function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
-
-  
-  psi_bin_train <- map_bins(psi_train$bin_val)
-  psi_bin_ps    <- map_bins(psi_ps$bin_val)
-  psi_bin_pop   <- map_bins(psi_pop$bin_val)
-
-  
-  
-  
+  cells_nps$psi_bin <- map_bins(cells_nps$bin_val)
+  cells_ps$psi_bin  <- map_bins(cells_ps$bin_val)
+  if (!is.null(cells_pop)) cells_pop$psi_bin <- map_bins(cells_pop$bin_val)
+  nps_ca$PUMA <- factor(nps_ca$PUMA, levels = PUMA_lev)
+  nps_join <- dplyr::left_join(
+    nps_ca[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")],
+    cells_nps[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "psi", "psi_bin")],
+    by = c("AGEP_binned", "SEX", "RAC1P", "PUMA")
+  )
+  if (any(is.na(nps_join$psi))) stop("Some NPS cells missing in cell_psi.")
+  lp_psi_train  <- qlogis(pmin(pmax(nps_join$psi, psi_eps), 1 - psi_eps))
+  psi_bin_train <- nps_join$psi_bin
+  ps_align <- ps
+  ps_align$AGEP_binned <- factor(ps_align$AGEP_binned, levels = levels(train_ref$AGEP_binned))
+  ps_align$SEX         <- factor(ps_align$SEX,         levels = levels(train_ref$SEX))
+  ps_align$RAC1P      <- factor(ps_align$RAC1P,      levels = levels(train_ref$RAC1P))
+  ps_align$PUMA       <- factor(ps_align$PUMA,      levels = PUMA_lev)
+  ps_join <- dplyr::left_join(
+    ps_align[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")],
+    cells_ps[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "psi", "psi_bin")],
+    by = c("AGEP_binned", "SEX", "RAC1P", "PUMA")
+  )
+  psi_ps     <- if (any(is.na(ps_join$psi))) rep(NA_real_, nrow(ps)) else ps_join$psi
+  psi_bin_ps <- if (any(is.na(ps_join$psi_bin))) rep(NA_integer_, nrow(ps)) else ps_join$psi_bin
+  acs_align <- .align_to_train(acs_pop, train_ref, PUMA_lev)
+  cells_pop_use <- if (is.null(cells_pop)) cells_nps else cells_pop
+  acs_join <- dplyr::left_join(
+    acs_align[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")],
+    cells_pop_use[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "psi", "psi_bin")],
+    by = c("AGEP_binned", "SEX", "RAC1P", "PUMA")
+  )
+  psi_pop     <- acs_join$psi
+  psi_bin_pop <- acs_join$psi_bin
+  if (any(is.na(psi_pop))) {
+    fill_psi <- mean(cells_nps$psi, na.rm = TRUE)
+    psi_pop[is.na(psi_pop)]     <- fill_psi
+    psi_bin_pop[is.na(psi_bin_pop)] <- map_bins(bin_fun(fill_psi, digits = bin_digits))
+  }
   pop_cells <- collapse_to_cells_int(
-    df          = acs_pop,
-    train_ref   = nps_ca,
-    PUMA_lev    = PUMA_lev,
-    # psi_bin_val = psi_pop$bin_val, # 0.3
-    psi_vec     = psi_pop$psi,
-    psi_bin_vec = psi_bin_pop, # 3
-    weight_col  = "weights",
-    bin_map = bin_map,
-    map_bins= function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
-    
+    df = acs_pop, train_ref = train_ref, PUMA_lev = PUMA_lev,
+    psi_vec = psi_pop, psi_bin_vec = psi_bin_pop,
+    weight_col = "weights", bin_map = bin_map, bin_digits = bin_digits, map_bins = map_bins
   )
-  
   ps_cells <- collapse_to_cells_int(
-    df          = ps,
-    train_ref   = nps_ca,
-    PUMA_lev    = PUMA_lev,
-    psi_vec     = psi_ps$psi,
-    psi_bin_vec = psi_bin_ps, # 3
-    weight_col  = "weights",
-    bin_map = bin_map,
-    map_bins= function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
-    
+    df = ps, train_ref = train_ref, PUMA_lev = PUMA_lev,
+    psi_vec = psi_ps, psi_bin_vec = psi_bin_ps,
+    weight_col = "weights", bin_map = bin_map, bin_digits = bin_digits, map_bins = map_bins
   )
-  
-  
-  ## 2) MAKE STAN DATA FOR MRP-INT ---------------------------------------
-  # data-dependent prior scales
-  
-  # outcome sd (binary y)
-  sd_y <- stats::sd(as.numeric(y)) 
-  
-  # column-wise sd for X
-  sd_x <- apply(X_train, 2, stats::sd)
-  sd_x[sd_x == 0] <- NA_real_   
-  beta_scale <- 1 * (sd_y)  / sd_x 
-  # when 2.5 * sd_y / sd_x is used, warning:  Exception: bernoulli_logit_glm_lpmf: Intercept[1] is -inf, but must be finite!
-  # beta_scale[!is.finite(beta_scale)] <- 5
-  # beta_scale <- pmin(beta_scale, 5) # to avoid intercept[1]=inf
-  # 
-  beta_psi_scale <- 2.5 * (sd_y) / stats::sd(qlogis(psi_train$psi))
-  sigma_psi_rate <- 1 / sd_y   
-  
-  
-  n <- nrow(X_train)
-  # threads <- 4
-  grainsize=as.integer(n / (threads*4))
-  
+  grainsize <- max(1L, as.integer(n / (threads * 4)))
   puma_id_train <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
-  J <- length(PUMA_lev)
-  
-  
+  sd_y <- stats::sd(as.numeric(y))
+  if (!is.finite(sd_y) || sd_y <= 0) sd_y <- 1
   stan_data <- list(
-    n = n,
-    k = k,
-    X = X_train,
-    y = y,
+    n = n, k = k, X = X_train, y = y,
     grainsize = grainsize,
-    lp_psi = qlogis(psi_train$psi),                  
-    G = G,
-    psi_bin = psi_bin_train,
-    
-    
-    J = J,
-    puma_id = puma_id_train,
-    
-    beta_scale = as.vector(beta_scale),
-    beta_psi_scale = beta_psi_scale,
-    sigma_psi_rate = sigma_psi_rate
-    
-    # sigma_puma_rate = 1 / sd_y,
-    
-    
-    
+    lp_psi = as.vector(lp_psi_train),
+    G = G, psi_bin = as.integer(psi_bin_train),
+    J = J, puma_id = puma_id_train,
+    sigma_psi_rate = 1 / sd_y
   )
-  ## 3) FIT STAN (MRP-INT) ----------------------------------------------------
   sample_args <- list(
     data = stan_data,
     chains = n_chains,
@@ -602,144 +581,75 @@ getMRP_INT <- function(MR,
     iter_sampling = stan_iter
   )
   if (!is.null(seed)) sample_args$seed <- seed
-  
   fit <- do.call(mod$sample, sample_args)
-  
-  
   sum_tbl <- fit$summary()
-
-  
-  ## 4) COLLECT DRAWS & SUMMARIZE --------------------------------------------
-  
-  # nps_ca <- MR
-  # nps_ca$AGEP_binned  <- factor(nps_ca$AGEP_binned)
-  # nps_ca$SEX   <- factor(nps_ca$SEX)
-  # nps_ca$RAC1P <- factor(nps_ca$RAC1P)
-  # PUMA_lev     <- levels(factor(nps_ca$PUMA))
-  # J            <- length(PUMA_lev)
   params <- get_params_int_draws(fit)
-  beta     <- params$beta
+  beta <- params$beta
   beta_psi <- params$beta_psi
-  zeta     <- params$zeta
-  a_puma   <- params$a_puma
-  
-  
-  
-  
-  # Pop poststrat (MRP-P with INT correction)
+  zeta <- params$zeta
+  a_puma <- params$a_puma
   mu_pop_draws <- if (nrow(pop_cells$Xp) > 0) {
-    poststrat_int_SxJ(
-      beta = beta, 
-      beta_psi = beta_psi, 
-      zeta = zeta, 
-      a_puma = a_puma,
-      Xp = pop_cells$Xp, 
-      g = pop_cells$g, 
-      psi = pop_cells$psi,
-      psi_bin = pop_cells$psi_bin,
-      w = pop_cells$w,
-      J = J
-    )
-  } else {
-    matrix(NA_real_, nrow = nrow(beta), ncol = J)
-  }
-  
-  
-  mu_ps_draws <- if (nrow(pop_cells$Xp) > 0) {
-    poststrat_int_SxJ(
-      beta = beta, 
-      beta_psi = beta_psi, 
-      zeta = zeta, 
-      a_puma = a_puma,
-      Xp = ps_cells$Xp, 
-      g = ps_cells$g, 
-      psi = ps_cells$psi,
-      psi_bin = ps_cells$psi_bin,
-      w = ps_cells$w,
-      J = J
-    )
-  } else {
-    matrix(NA_real_, nrow = nrow(beta), ncol = J)
-  }
-  
-  
-  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev, "mrp-p-int")
-  puma_summary_mrpr <- make_summary(mu_ps_draws, PUMA_lev, "mrp-r-int")
-
+    poststrat_int_SxJ(beta, beta_psi, zeta, a_puma,
+                      pop_cells$Xp, pop_cells$g, pop_cells$psi, pop_cells$psi_bin,
+                      pop_cells$w, J)
+  } else matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  mu_ps_draws <- if (nrow(ps_cells$Xp) > 0) {
+    poststrat_int_SxJ(beta, beta_psi, zeta, a_puma,
+                      ps_cells$Xp, ps_cells$g, ps_cells$psi, ps_cells$psi_bin,
+                      ps_cells$w, J)
+  } else matrix(NA_real_, nrow = nrow(beta), ncol = J)
+  lbl <- if (include_response) "-PUBCOV" else ""
+  pumas_pop <- sort(unique(pop_cells$g))
+  pumas_ps  <- sort(unique(ps_cells$g))
+  PUMA_lev_mrpp <- if (length(pumas_pop) < J) PUMA_lev[pumas_pop] else PUMA_lev
+  PUMA_lev_mrpr <- if (length(pumas_ps)  < J) PUMA_lev[pumas_ps]  else PUMA_lev
+  if (length(pumas_pop) < J) mu_pop_draws <- mu_pop_draws[, pumas_pop, drop = FALSE]
+  if (length(pumas_ps)  < J) mu_ps_draws  <- mu_ps_draws[,  pumas_ps,  drop = FALSE]
+  puma_summary_mrpp <- make_summary(mu_pop_draws, PUMA_lev_mrpp, paste0("mrp-p-int", lbl))
+  puma_summary_mrpr <- make_summary(mu_ps_draws,  PUMA_lev_mrpr, paste0("mrp-r-int", lbl))
+  puma_summary_mrpr_bootstrap <- NULL
   if (bootstrap) {
-    # Preallocate array for S × J × L (posterior × PUMAs × bootstrap)
     S <- nrow(beta)
     mu_boot_array <- array(NA_real_, dim = c(S, J, L))
-
-    cat("\nGenerating", L, "bootstrap samples for MRP-INT...\n")
-    system.time({
-      for (l in 1:L) {
-        # Generate bootstrap sample l using simple weighted bootstrap
-        boot_idx <- sample(
-          1:nrow(ps),
-          size = nrow(ps),
-          replace = TRUE,
-          prob = ps$weights
-        )
-
-        # Resample THIS bootstrap replicate
-        ps_boot <- ps[boot_idx, ]
-
-        # Compute psi for bootstrap sample
-        psi_ps_boot <- predict_psi(ps_boot)
-        psi_bin_ps_boot <- map_bins(psi_ps_boot$bin_val)
-
-        # Collapse THIS bootstrap sample to cells
-        ps_boot_cells <- collapse_to_cells_int(
-          df          = ps_boot,
-          train_ref   = nps_ca,
-          PUMA_lev    = PUMA_lev,
-          psi_vec     = psi_ps_boot$psi,
-          psi_bin_vec = psi_bin_ps_boot,
-          weight_col  = "weights",
-          bin_map     = bin_map,
-          map_bins    = function(bin_val_vec) as.integer(bin_map[as.character(bin_val_vec)])
-        )
-
-        # Poststratify THIS bootstrap sample
-        mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0)
-          poststrat_int_SxJ(
-            beta = beta,
-            beta_psi = beta_psi,
-            zeta = zeta,
-            a_puma = a_puma,
-            Xp = ps_boot_cells$Xp,
-            g = ps_boot_cells$g,
-            psi = ps_boot_cells$psi,
-            psi_bin = ps_boot_cells$psi_bin,
-            w = ps_boot_cells$w,
-            J = J
-          ) else
-            matrix(NA_real_, nrow = S, ncol = J)
-
-        if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
-      }
-    })
-
-    # Flatten S × J × L into (S*L) × J to capture both uncertainties
-    # aperm(mu_boot_array, c(3, 1, 2)) reorders dimensions from (S, J, L) to (L, S, J)
-    # matrix(..., nrow = S*L, ncol = J) then stacks all L bootstrap replicates vertically,
-    # so make_summary() treats all (S*L) rows identically when computing quantiles across
-    # both posterior draws (S) and bootstrap replicates (L)
-    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S*L, ncol = J)
-    puma_summary_mrpr_bootstrap <- make_summary(mu_combined, PUMA_lev, "mrp-r-int-bootstrap")
-
-  } else {
-    puma_summary_mrpr_bootstrap=NULL
+    cat("\nGenerating", L, "bootstrap samples for getMRP_INT...\n")
+    for (l in 1:L) {
+      boot_idx <- sample(seq_len(nrow(ps)), nrow(ps), replace = TRUE, prob = ps$weights)
+      ps_boot <- ps[boot_idx, ]
+      ps_boot$AGEP_binned <- factor(ps_boot$AGEP_binned, levels = levels(train_ref$AGEP_binned))
+      ps_boot$SEX         <- factor(ps_boot$SEX,         levels = levels(train_ref$SEX))
+      ps_boot$RAC1P      <- factor(ps_boot$RAC1P,      levels = levels(train_ref$RAC1P))
+      ps_boot$PUMA       <- factor(ps_boot$PUMA,       levels = PUMA_lev)
+      ps_boot_join <- dplyr::left_join(
+        ps_boot[, c("AGEP_binned", "SEX", "RAC1P", "PUMA")],
+        cells_ps[, c("AGEP_binned", "SEX", "RAC1P", "PUMA", "psi", "psi_bin")],
+        by = c("AGEP_binned", "SEX", "RAC1P", "PUMA")
+      )
+      psi_boot <- ps_boot_join$psi
+      psi_bin_boot <- ps_boot_join$psi_bin
+      if (any(is.na(psi_boot))) psi_boot[is.na(psi_boot)] <- mean(cells_nps$psi)
+      if (any(is.na(psi_bin_boot))) psi_bin_boot[is.na(psi_bin_boot)] <- 1L
+      ps_boot_cells <- collapse_to_cells_int(
+        df = ps_boot, train_ref = train_ref, PUMA_lev = PUMA_lev,
+        psi_vec = psi_boot, psi_bin_vec = psi_bin_boot,
+        weight_col = "weights", bin_map = bin_map, bin_digits = bin_digits, map_bins = map_bins
+      )
+      mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0) {
+        poststrat_int_SxJ(beta, beta_psi, zeta, a_puma,
+                          ps_boot_cells$Xp, ps_boot_cells$g, ps_boot_cells$psi, ps_boot_cells$psi_bin,
+                          ps_boot_cells$w, J)
+      } else matrix(NA_real_, S, J)
+      if (l %% 10 == 0) cat("  Completed", l, "of", L, "bootstrap samples\n")
+    }
+    mu_combined <- matrix(aperm(mu_boot_array, c(3, 1, 2)), nrow = S * L, ncol = J)
+    if (length(pumas_ps) < J) mu_combined <- mu_combined[, pumas_ps, drop = FALSE]
+    puma_summary_mrpr_bootstrap <- make_summary(mu_combined, PUMA_lev_mrpr, paste0("mrp-r-int", lbl, "-bootstrap"))
   }
-
   list(
-    fit          = fit,
+    fit = fit,
     puma_summary_mrpp = puma_summary_mrpp,
     puma_summary_mrpr = puma_summary_mrpr,
     puma_summary_mrpr_bootstrap = puma_summary_mrpr_bootstrap,
-    psi_train     = psi_train,
-    rhat         = sum_tbl$rhat,
-    adj_factor   = adj_factor
+    rhat = sum_tbl$rhat,
+    cell_psi = cells_nps
   )
 }

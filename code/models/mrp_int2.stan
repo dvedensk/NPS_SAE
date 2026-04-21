@@ -20,6 +20,7 @@ functions {
   }
 }
 
+
 data {
   // --- Training data 
   int<lower=1> n;
@@ -35,8 +36,6 @@ data {
   // reduce_sum grainsize
   int<lower=1> grainsize;
   // ---prior
-  vector[k] beta_scale;      // Vector of scales for beta
-  real beta_psi_scale;       // Scale for beta_psi
   real sigma_psi_rate;       // Rate for sigma_psi
   
 }
@@ -58,17 +57,13 @@ transformed parameters {
 }
 
 model {
-  beta      ~ normal(0, beta_scale);
-  beta_psi  ~ normal(0, beta_psi_scale);
+  beta      ~ normal(0, 3);
+  beta_psi  ~ normal(0, 3);
   sigma_psi ~ exponential(sigma_psi_rate);
   zeta_raw  ~ normal(0, 1);
   z_puma     ~ normal(0, 1);
-  sigma_puma ~student_t(3,0,2.5);  
+ sigma_puma ~ cauchy(0, 5);  
   target += reduce_sum(bern_ll_slice, y, grainsize,
                        X, psi_bin, lp_psi, beta, beta_psi, zeta,
                        puma_id, a_puma);
-                       
 }
-
-
-

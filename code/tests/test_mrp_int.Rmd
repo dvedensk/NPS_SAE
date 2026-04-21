@@ -51,7 +51,7 @@ cat("✓ Samples regenerated\n")
 data.frame(
   Sample = c("Population", "PS", "NPS"),
   N = c(nrow(acs_pop), nrow(ps_df), nrow(nps_df)),
-  HICOV_Rate = c(mean(acs_pop$HICOV), mean(ps_df$HICOV), mean(nps_df$HICOV))
+  PUBCOV_Rate = c(mean(acs_pop$PUBCOV), mean(ps_df$PUBCOV), mean(nps_df$PUBCOV))
 )
 ```
 
@@ -122,7 +122,16 @@ Then the inclusion probabilities are obtained by
 
 
 
-We get two sets of estimated inclusion probabilities. The first is continuous $\psi_i$ to use as linear predictor in the outcome model. Then we construct A discrete inclusion categories $\Psi_g, g=1,\cdots G$ by rounding $\psi_i$ to one decimal place, such that observations within the same inclusion probabilities bin are assigned to the same group and share a common intercept. 
+We get two sets of estimated inclusion probabilities. The first is continuous $\psi_i$ to use as a linear predictor in the outcome model. Then we construct discrete inclusion categories $\Psi_g, g=1,\cdots G$ by rounding $\psi_i$ to one decimal place, such that observations within the same inclusion probability bin are assigned to the same group and share a common intercept.
+
+The current `getMRP_INT()` implementation also supports `include_response = TRUE`,
+which adds `PUBCOV` to the selection model. In that variant, `PUMA` is intentionally
+excluded from the selection formula:
+\[
+S_i \sim \text{AGEP\_binned} + \text{SEX} + \text{RAC1P} + \text{PUBCOV}.
+\]
+Including both 281 PUMA indicators and `PUBCOV` produced extreme estimated
+inclusion probabilities and poor Stan geometry in smoke tests.
 
 
 
@@ -177,7 +186,7 @@ We get two sets of estimated inclusion probabilities. The first is continuous $\
   }
   
   sel_fit <- stats::glm(
-    S ~ AGEP_binned + SEX + RAC1P, 
+    S ~ AGEP_binned + SEX + RAC1P + PUMA, 
     data = sel_dat,
     family = binomial(),
     weights = sel_dat$weights
@@ -256,17 +265,17 @@ discretized category as defined above. The MRP-INT outcome model is
   &\sim \mathrm{Bernoulli}(p_i),\\
   \mathrm{logit}(p_i)
   &= \mathbf{x}_i^\top \boldsymbol{\beta} + \beta_\psi \,\mathrm{logit}(\psi_i) +\Psi_{g[i]}  + \alpha_{m[i]},\\
-  \boldsymbol{\beta} &\sim \text{Normal}(0, \boldsymbol{\sigma_{\beta}}),\\
-  \beta_{\psi} &\sim \text{Normal}(0, \sigma_{\psi}),\\
+  \boldsymbol{\beta} &\sim \text{Normal}(0, 3),\\
+  \beta_{\psi} &\sim \text{Normal}(0, 3),\\
    \alpha_m &\sim \text{Normal}(0, \sigma_{m})\qquad m = 1,\cdots, M = 281, \\
 \Psi_g \mid \sigma_\psi &\sim \text{Normal}(0,\sigma_\psi^2) \qquad g = 1,\dots,G,\\
   \sigma_\psi &\sim \mathrm{Exponential}(\lambda),\\
-    \sigma_m &\sim \text{t}(\nu=3, s=2.5).
+    \sigma_m &\sim \text{Cauchy}^+(0, 5).
 \end{align}
 Here $\boldsymbol{\beta}$ are fixed-effect coefficients for the covariates
 $\mathbf{x}_i$, $\beta_\psi$ is the coefficient on the continuous inclusion
 term $\mathrm{logit}(\psi_i)$, and $\Psi_g$ is a random intercept
-associated with the inclusion bin g. The inclusion bin random effects follow a Normal distribution with the standard deviation assigned a Exponential prio, where $\lambda$ is a rate parameter from data such that $\lambda = 1 / \widehat{\sigma}_Y$. Moderately informative priors are used for covariates, in which $\sigma_{\beta} = sd(Y)/sd(X)$ <span style="Si (2023) suggested 2.5*sd(Y)/sd(X), but it caused stan warning of -inf intercepts, so I used sd(Y)/sd(X).</i></span>. Finally, $\alpha_{m[i]}$ denotes denotes the random intercept for the m-th PUMA that unit i resides in, $\sigma_m$ follows half t distribution.
+associated with the inclusion bin g. The inclusion bin random effects follow a Normal distribution with the standard deviation assigned an Exponential prior, where $\lambda$ is a rate parameter from data such that $\lambda = 1 / \widehat{\sigma}_Y$. Finally, $\alpha_{m[i]}$ denotes the random intercept for the m-th PUMA that unit i resides in.
 
 
 <span style="color: blue;"><i>J was used for PUMA and c was used for cells in the code. I changed the notation in the notes to use m for PUMA and j for cells, since Si (2023) uses j for cells and does not use areal level notation.</i></span>
@@ -312,8 +321,6 @@ data {
   // reduce_sum grainsize
   int<lower=1> grainsize;
   // ---prior
-  vector[k] beta_scale;      // Vector of scales for beta
-  real beta_psi_scale;       // Scale for beta_psi
   real sigma_psi_rate;       // Rate for sigma_psi
   
 }
@@ -335,12 +342,12 @@ transformed parameters {
 }
 
 model {
-  beta      ~ normal(0, beta_scale);
-  beta_psi  ~ normal(0, beta_psi_scale);
+  beta      ~ normal(0, 3);
+  beta_psi  ~ normal(0, 3);
   sigma_psi ~ exponential(sigma_psi_rate);
   zeta_raw  ~ normal(0, 1);
   z_puma     ~ normal(0, 1);
-  sigma_puma ~student_t(3,0,2.5);  
+  sigma_puma ~ cauchy(0, 5);  
   target += reduce_sum(bern_ll_slice, y, grainsize,
                        X, psi_bin, lp_psi, beta, beta_psi, zeta,
                        puma_id, a_puma);
@@ -527,7 +534,7 @@ tryCatch(
       ps = ps_df,
       acs_pop = acs_pop,
       mod = mod,
-      adjust=T,
+      adjust=TRUE,
       bootstrap=TRUE,  # Essential for proper uncertainty quantification
       L=100            # Number of bootstrap replicates (recommended: 100)
       )
@@ -550,6 +557,21 @@ tryCatch(
 )
 
 
+```
+
+```{r fit-model-include-response, eval=FALSE}
+# Optional PUBCOV selection-model variant. This uses
+# S ~ AGEP_binned + SEX + RAC1P + PUBCOV internally, without PUMA.
+mrpint_pubcov <- getMRP_INT(
+  MR = nps_df,
+  ps = ps_df,
+  acs_pop = acs_pop,
+  mod = mod,
+  include_response = TRUE,
+  adjust = TRUE,
+  bootstrap = TRUE,
+  L = 100
+)
 ```
 
 # Results
