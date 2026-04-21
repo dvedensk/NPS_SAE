@@ -203,7 +203,7 @@ for (sim in 1:Nsim) {
     weights = ps_scale_weights,
     puma = apply(Psi_ps, 1, which.max),
     X = X_ps,
-    sigma2_beta = 3 # Prior variance for fixed effects (weakly informative)
+    sigma2_beta = 9 # Prior variance for fixed effects (weakly informative)
   )
 
   bulm_stan_out <- stan_bulm_mod$sample(
