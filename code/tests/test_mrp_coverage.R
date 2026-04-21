@@ -21,7 +21,7 @@ acs_pop <- read_csv("data/ACS_NPS_pop.csv") %>%
   )
 
 cat("\n=== MRP Coverage Comparison: Baseline vs Bootstrap ===\n")
-cat("Testing both MRP and MRP-INT models\n\n")
+cat("Testing MRP and MRP-INT (with and without include_response)\n\n")
 
 # Compile Stan models
 cat("Compiling Stan models...\n")
@@ -78,6 +78,7 @@ mrp_baseline <- getMRP(
   MR = nps_df,
   ps = ps_df,
   acs_pop = acs_pop,
+  mod = mod,
   bootstrap = FALSE
 )
 elapsed <- Sys.time() - start_time
@@ -95,6 +96,7 @@ mrp_boot <- getMRP(
   MR = nps_df,
   ps = ps_df,
   acs_pop = acs_pop,
+  mod = mod,
   bootstrap = TRUE,
   L = 100
 )

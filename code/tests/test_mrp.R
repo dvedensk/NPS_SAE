@@ -69,7 +69,8 @@ tryCatch(
     mrp <- getMRP(
       MR = nps_data,
       ps = ps_data,
-      acs_pop = acs_pop
+      acs_pop = acs_pop,
+      mod = mod
     )
 
     mrp_time <- Sys.time() - start_time
@@ -117,6 +118,40 @@ tryCatch(
   },
   error = function(e) {
     cat("❌ getMRP_INT failed:", e$message, "\n")
+  }
+)
+
+cat("\n⏱️  Profiling getMRP_INT(include_response = TRUE)...\n")
+start_time <- Sys.time()
+
+tryCatch(
+  {
+    mrp2 <- getMRP_INT(
+      MR = nps_data,
+      ps = ps_data,
+      acs_pop = acs_pop,
+      mod = modINT,
+      include_response = TRUE
+    )
+
+    mrp_int_resp_time <- Sys.time() - start_time
+    cat("✅ getMRP_INT(include_response=TRUE) completed in",
+        round(mrp_int_resp_time, 2), attr(mrp_int_resp_time, "units"), "\n")
+
+    mrpint_p <- mrp2$puma_summary_mrpp
+    mrpint_r <- mrp2$puma_summary_mrpr
+    cat("- MRP-INT-P (PUBCOV) results:", nrow(mrpint_p), "PUMAs\n")
+    cat("- MRP-INT-R (PUBCOV) results:", nrow(mrpint_r), "PUMAs\n")
+    cat("- Model labels:", unique(mrpint_p$model), "/", unique(mrpint_r$model), "\n")
+
+    if (!is.null(mrp2$rhat)) {
+      max_rhat <- max(mrp2$rhat, na.rm = TRUE)
+      cat("- Max R-hat:", round(max_rhat, 3), "\n")
+      if (max_rhat > 1.1) cat("⚠️  Warning: Some chains may not have converged (R-hat > 1.1)\n")
+    }
+  },
+  error = function(e) {
+    cat("❌ getMRP_INT(include_response=TRUE) failed:", e$message, "\n")
   }
 )
 

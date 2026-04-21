@@ -87,7 +87,10 @@ y_i &\sim \text{Bernoulli}(p_i) \\
 
 \end{aligned}$$
 
-Moderately informative priors $\sigma_{\beta} =2.5*sd(Y)/sd(X))$ are used for covariates baseed on prior specification in supplementary A.1.
+The current implementation in `code/models/si2.stan` uses a weakly informative fixed-effect prior
+$\boldsymbol{\beta} \sim \text{Normal}(0, 3)$, where 3 is the standard deviation.
+The PUMA random intercepts use a non-centered parameterization with
+$z_m \sim \text{Normal}(0, 1)$ and $\sigma_m \sim \text{Cauchy}^+(0, 5)$.
 <span style="color: blue;"><i>J was used for PUMA and c was used for cells in the code. I changed the notation in the notes to use m for PUMA and j for cells, since Si (2023) uses j for cells and does not use areal level notation.</i></span>
 
 
@@ -97,6 +100,7 @@ Moderately informative priors $\sigma_{\beta} =2.5*sd(Y)/sd(X))$ are used for co
 getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
+                mod=mod,
                 bootstrap=FALSE,
                 L=100){
   
@@ -108,11 +112,13 @@ getMRP=function(MR=nps,
   nps_ca$SEX   <- factor(nps_ca$SEX)
   nps_ca$RAC1P <- factor(nps_ca$RAC1P)
   PUMA_lev <- levels(factor(nps_ca$PUMA))  # lock PUMA levels
+  J <- length(PUMA_lev)
   
   # fixed-effects design 
   X_train <- model.matrix(~ 0 + AGEP_binned + SEX + RAC1P, data = nps_ca)
   k <- ncol(X_train); n <- nrow(X_train)
   y <- as.integer(nps_ca$PUBCOV)
+  puma_id <- as.integer(factor(nps_ca$PUMA, levels = PUMA_lev))
 
   
 
@@ -120,21 +126,15 @@ getMRP=function(MR=nps,
   # threads <- 4
   # grainsize=as.integer(n / (threads))
 
-  #  data dependent prior for beta
-  sd_y <- stats::sd(as.numeric(y))
-  sd_x <- apply(X_train, 2, stats::sd)
-  sd_x[sd_x == 0] <- NA_real_   # or small number
-  beta_scale <- 2.5 * sd_y / sd_x
-  
   stan_data <- list(
     # training
     n = n,
     k = k,
     X = X_train,
     y = y,
-    grainsize = 16000,      
-    beta_scale = as.vector(beta_scale)
-    
+    grainsize = 16000,
+    J = J,
+    puma_id = puma_id
   )
 
 
@@ -163,9 +163,16 @@ getMRP=function(MR=nps,
 functions {
   real bern_glm_ll_slice(array[] int y_slice, int start, int end,
                          matrix X,
-                         vector beta) {
+                         vector beta,
+                         array[] int puma_id,
+                         vector a_puma) {
     // intercept = 0 because X is built with ~ 0 + AGEP + SEX + RAC1P
-    return bernoulli_logit_glm_lpmf(y_slice | X[start:end, ], 0, beta);
+    int N_slice = end - start + 1;
+    vector[N_slice] eta = X[start:end, ] * beta;
+    for (i in 1:N_slice) {
+      eta[i] += a_puma[puma_id[start + i - 1]];
+    }
+    return bernoulli_logit_lpmf(y_slice | eta);
   }
 }
 
@@ -175,19 +182,28 @@ data {
   matrix[n, k] X;
   array[n] int<lower=0, upper=1> y;
   int<lower=1> grainsize;
-  vector<lower=0>[k] beta_scale;
+  int<lower=1> J;
+  array[n] int<lower=1, upper=J> puma_id;
 }
 
 parameters {
   vector[k] beta;
+  vector[J] z_puma;
+  real<lower=0> sigma_puma;
+}
+
+transformed parameters {
+  vector[J] a_puma = sigma_puma * z_puma;
 }
 
 model {
-  // Priors: β_j ~ Normal(0, beta_scale[j])
-  beta ~ normal(0, beta_scale);
+  // Priors: beta_j ~ Normal(0, 3), where 3 is the standard deviation
+  beta ~ normal(0, 3);
+  z_puma ~ normal(0, 1);
+  sigma_puma ~ cauchy(0, 5);
 
   // Likelihood
-  target += reduce_sum(bern_glm_ll_slice, y, grainsize, X, beta);
+  target += reduce_sum(bern_glm_ll_slice, y, grainsize, X, beta, puma_id, a_puma);
 }
 
 ```
@@ -198,7 +214,7 @@ model {
 ##  Poststrification
 ### using probability sample 
 Let s be posterior draw and j be cell build from probability sample, $w_j$ is sum of individual weight in the cell j.  
-\[p_{j,s} = \text{expit} \left( X_j^{\top} \beta_s \right)\]
+\[p_{j,s} = \text{expit} \left( X_j^{\top} \beta_s + \alpha_{m[j],s} \right)\]
 The PUMA-level estimate for area \( m \) is then
 \[
 \theta_{m,s}
@@ -297,6 +313,7 @@ poststrat_SxJ <- function(beta, Xp, g, w = NULL, J = max(g)) {
 getMRP=function(MR=nps,
                 ps=ps,
                 acs_pop=acs_pop,
+                mod=mod,
                 bootstrap=FALSE,
                 L=100
                 ){
@@ -377,6 +394,7 @@ tryCatch(
       MR = nps_df,
       ps = ps_df,
       acs_pop = acs_pop,
+      mod = mod,
       bootstrap=TRUE,  # Essential for proper uncertainty quantification
       L=100            # Number of bootstrap replicates (recommended: 100)
     )

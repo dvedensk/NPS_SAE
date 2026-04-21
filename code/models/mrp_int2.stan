@@ -36,8 +36,6 @@ data {
   // reduce_sum grainsize
   int<lower=1> grainsize;
   // ---prior
-  vector[k] beta_scale;      // Vector of scales for beta
-  real beta_psi_scale;       // Scale for beta_psi
   real sigma_psi_rate;       // Rate for sigma_psi
   
 }
