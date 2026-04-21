@@ -122,7 +122,7 @@ Then the inclusion probabilities are obtained by
 
 
 
-We get two sets of estimated inclusion probabilities. The first is continuous $\psi_i$ to use as linear predictor in the outcome model. Then we construct A discrete inclusion categories $\Psi_g, g=1,\cdots G$ by rounding $\psi_i$ to one decimal place, such that observations within the same inclusion probabilities bin are assigned to the same group and share a common intercept.
+We get two sets of estimated inclusion probabilities. The first is continuous $\psi_i$ to use as a linear predictor in the outcome model. Then we construct discrete inclusion categories $\Psi_g, g=1,\cdots G$ by rounding $\psi_i$ to one decimal place, such that observations within the same inclusion probability bin are assigned to the same group and share a common intercept.
 
 The current `getMRP_INT()` implementation also supports `include_response = TRUE`,
 which adds `PUBCOV` to the selection model. In that variant, `PUMA` is intentionally

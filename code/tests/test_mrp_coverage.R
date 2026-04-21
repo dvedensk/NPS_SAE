@@ -21,7 +21,7 @@ acs_pop <- read_csv("data/ACS_NPS_pop.csv") %>%
   )
 
 cat("\n=== MRP Coverage Comparison: Baseline vs Bootstrap ===\n")
-cat("Testing MRP and MRP-INT (with and without include_response)\n\n")
+cat("Testing MRP and MRP-INT\n\n")
 
 # Compile Stan models
 cat("Compiling Stan models...\n")

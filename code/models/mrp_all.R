@@ -495,7 +495,15 @@ getMRP_INT <- function(MR,
   cells_nps <- cells_psi$cells_nps
   cells_ps  <- cells_psi$cells_ps
   cells_pop <- cells_psi$cells_pop
-  if (is.null(cells_pop) && !is.null(acs_pop) && nrow(acs_pop) > 0) cells_pop <- cells_nps
+  if (is.null(cells_pop) && !is.null(acs_pop) && nrow(acs_pop) > 0) {
+    if (isTRUE(include_response)) {
+      stop(
+        "include_response = TRUE requires acs_pop with PUBCOV so population ",
+        "PUBCOV composition can be marginalized."
+      )
+    }
+    cells_pop <- cells_nps
+  }
   all_bin_vals <- sort(unique(c(
     cells_nps$bin_val,
     cells_ps$bin_val,
