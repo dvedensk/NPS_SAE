@@ -76,12 +76,19 @@ ciginas_out <- function(ps,
 
   out <- dplyr::full_join(ps_est, nps_ipw_est, by = "PUMA") %>%
     dplyr::mutate(
+      # The discrepancy term is only defined when both component estimates exist.
       nps_bias_sq = dplyr::if_else(
         is.na(ps_est) | is.na(nps_ipw_est),
         NA_real_,
         (nps_ipw_est - ps_est)^2
       ),
       nps_mse = dplyr::coalesce(nps_ipw_var, 0) + dplyr::coalesce(nps_bias_sq, 0),
+      # Handle the five cases for the NPS blend weight:
+      # - only NPS exists -> use NPS entirely
+      # - only PS exists -> use PS entirely
+      # - neither exists -> leave missing
+      # - both exist but the denominator is degenerate -> fall back to PS
+      # - otherwise use the usual PS variance / (PS variance + NPS MSE) blend
       weight_nps = dplyr::case_when(
         is.na(ps_est) & !is.na(nps_ipw_est) ~ 1,
         !is.na(ps_est) & is.na(nps_ipw_est) ~ 0,
@@ -95,6 +102,7 @@ ciginas_out <- function(ps,
         is.na(nps_ipw_est) ~ ps_est,
         TRUE ~ weight_nps * nps_ipw_est + (1 - weight_nps) * ps_est
       ),
+      # When both components exist, keep the blended estimate between them.
       point_est = dplyr::case_when(
         is.na(ps_est) ~ point_est,
         is.na(nps_ipw_est) ~ point_est,
@@ -112,6 +120,7 @@ ciginas_out <- function(ps,
   if (bounded_response) {
     out <- out %>%
       dplyr::mutate(
+        # Guard against tiny numerical drift outside [0, 1] for bounded outcomes.
         ps_est = pmin(pmax(ps_est, 0), 1),
         nps_ipw_est = pmin(pmax(nps_ipw_est, 0), 1),
         point_est = pmin(pmax(point_est, 0), 1)
