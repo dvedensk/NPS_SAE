@@ -21,6 +21,7 @@ source(file.path("code", "utils.R")) # utils.R must define estimate_ipw()
 source(file.path("code", "models", "nps_prior.R")) # NPS prior helper functions
 source(file.path("code", "models", "bulm.R"))
 source(file.path("code", "models", "VSW.R"))
+source(file.path("code", "models", "ciginas.R"))
 
 source(file.path("code", "models", "mrp_all.R"))
 
@@ -62,7 +63,7 @@ PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 #   Extreme:   PWGTP=0.10, POVPIP=-1.52 → DDC=-0.089, ESS=6.6,   bias=-0.190 (worst opt-in error)
 #   Typical:   PWGTP=0.10, POVPIP=-0.41 → DDC=-0.029, ESS=63.9,  bias=-0.061 (avg opt-in error)
 #   Favorable: PWGTP=0.10, POVPIP=-0.22 → DDC=-0.014, ESS=254.6, bias=-0.030 (low-bias check)
-NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52)  # Extreme (default)
+NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52) # Extreme (default)
 
 # NPS prior configuration
 # Choose from: "pp", "md", "mdl", "mdl10"
@@ -325,7 +326,7 @@ for (sim in 1:Nsim) {
   mrpint_r <- mrp1$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpint_p <- mrp1$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
 
-  
+
   # 4.3 MRP-INT with PUBCOV in selection model (MRP-INT-R and MRP-INT-P)
   mrp_pubcov_out <- getMRP_INT(
     MR = nps,
@@ -344,8 +345,8 @@ for (sim in 1:Nsim) {
   )
   mrpint_r_pubcov <- mrp_pubcov_out$puma_summary_mrpr_bootstrap %>% select(PUMA, point_est, lower_CI, upper_CI, model)
   mrpint_p_pubcov <- mrp_pubcov_out$puma_summary_mrpp %>% select(PUMA, point_est, lower_CI, upper_CI, model)
-  
-  
+
+
   # ============================================================
   # METHOD 5: VSW METHOD
   # ============================================================
@@ -354,6 +355,16 @@ for (sim in 1:Nsim) {
   result_VSW <- vsw_out(ps[, !colnames(ps) %in% "weights"], nps, X_formula, response = response_var)
   VSW_out <- result_VSW[, c("PUMA", "VSW_point_est", "lower_CI", "upper_CI", "model")]
   colnames(VSW_out) <- colnames(direst)
+
+  # Simplified Ciginas composite: PS direct estimate + NPS-only IPW estimate.
+  ciginas_res <- ciginas_out(
+    ps = ps,
+    nps = nps,
+    X_formula = X_formula,
+    response = response_var
+  ) %>%
+    dplyr::select(PUMA, point_est, lower_CI, upper_CI, model)
+  ciginas_res$model <- "Ciginas (simplified)"
 
   # ============================================================
   # METHOD 6: NPS PRIOR METHODS (MD/PP)
@@ -459,6 +470,7 @@ for (sim in 1:Nsim) {
     mrpint_r_pubcov, # METHOD 4.3
     mrpint_p_pubcov, # METHOD 4.3
     VSW_out, # METHOD 5
+    ciginas_res, # Simplified Ciginas composite
     nps_prior_pl_res, # METHOD 6a
     nps_prior_rak_res # METHOD 6b
   )
