@@ -92,7 +92,7 @@ generate_bulm_results <- function(grouped_pop_df, alpha, X, Psi, y, sigma2_beta=
               chains=coeffs))
 }
 
-get_stan_summaries <- function(y, X, Psi, weights, sigma2_beta=3, n_chains,
+get_stan_summaries <- function(y, X, Psi, weights, sigma2_beta=9, n_chains,
                                mcmc_burn, mcmc_iter, grouped_pop_df, alpha,
                                X_formula, Psi_formula, threads_per_chain=4,
                                seed = NULL) {
@@ -100,7 +100,7 @@ get_stan_summaries <- function(y, X, Psi, weights, sigma2_beta=3, n_chains,
   bulm_stan_dat <- list(r=ncol(Psi), nn=length(y), p=ncol(X),
                         Y=y, weights=weights,
                         puma=apply(Psi, 1, which.max),
-                        X=X, sigma2_beta=3)
+                        X=X, sigma2_beta=sigma2_beta)
 
   sample_args <- list(
     data = bulm_stan_dat,
