@@ -5,7 +5,7 @@ data {
 
   matrix[n, p] X;                    // PS design matrix
 
-  vector<lower=0, upper=1>[n] y;  // PS outcomes
+  array[n] int<lower=0, upper=1> y;  // PS outcomes
 
   vector<lower=0>[n] w;              // PS weights (rescaled to sum to n)
 
@@ -15,24 +15,23 @@ data {
   array[n] int<lower=1, upper=J> domain; // PS domain indices
 }
 
-parameters {
-  vector[p] beta;
-  vector[J] z_domain;
-  real<lower=0> sigma_domain;
+transformed data {
+  vector[n] y_vec = to_vector(y);
 }
 
-transformed parameters {
+parameters {
+  vector[p] beta;
   vector[J] eta_domain;
-  eta_domain = sigma_domain * z_domain; // non-centered for better efficiency
+  real<lower=0> sigma_domain;
 }
 
 model {
   // Prior
   beta ~ normal(beta_prior_mean, beta_prior_sd);
   sigma_domain ~ cauchy(0, 5);
-  z_domain ~ normal(0, 1);
+  eta_domain ~ normal(0, sigma_domain);
 
   // Pseudolikelihood (only PS) (vectorized)
   vector[n] eta = X * beta + eta_domain[domain]; // linear predictor
-  target += dot_product(w, y .* eta - log1p_exp(eta));
+  target += dot_product(w, y_vec .* eta - log1p_exp(eta));
 }

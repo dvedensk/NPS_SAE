@@ -241,7 +241,7 @@ nps_prior_mcmc <- function(
     p = p,
     J = J,
     X = X_eff,
-    y = y,
+    y = as.integer(y),
     w = as.numeric(wts),
     domain = as.integer(domain_ps)
   )
@@ -379,7 +379,7 @@ nps_prior_mcmc <- function(
     pp_data <- c(stan_data, list(
       n_np = n_np,
       X_np = X_NP_eff, 
-      y_np = y_NP, 
+      y_np = as.integer(y_NP), 
       a = a,
       domain_np = as.integer(domain_nps)
     ))
