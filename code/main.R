@@ -46,6 +46,11 @@ nps_prior_pp_mod <- cmdstan_model(
   cpp_options = list(stan_threads = TRUE)
 )
 
+nps_prior_d_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_d.stan"),
+  cpp_options = list(stan_threads = TRUE)
+)
+
 Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
 
 # ============================================================
@@ -66,8 +71,8 @@ PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52) # Extreme (default)
 
 # NPS prior configuration
-# Choose from: "pp", "md", "mdl", "mdl10"
-nps_prior_which <- c("pp")
+# Choose from: "pp", "d", "dl", "dl10"
+nps_prior_which <- c("pp", "d")
 scale_nps_prior_weight_covariate <- TRUE
 
 # Other simulation parameters
@@ -386,7 +391,7 @@ for (sim in 1:Nsim) {
   }
 
   nps_prior_pl_res <- nps_prior_mcmc(
-    md_mod = NULL,
+    md_mod = nps_prior_d_mod,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
@@ -427,7 +432,7 @@ for (sim in 1:Nsim) {
   nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
 
   nps_prior_rak_res <- nps_prior_mcmc(
-    md_mod = NULL,
+    md_mod = nps_prior_d_mod,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
