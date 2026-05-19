@@ -32,6 +32,6 @@ model {
   eta_domain ~ normal(0, sigma_domain);
 
   // Pseudolikelihood (only PS) (vectorized)
-  vector[n] eta = X * beta + eta_domain[domain]; // linear predictor
-  target += dot_product(w, y_vec .* eta - log1p_exp(eta));
+  vector[n] lin_pred = X * beta + eta_domain[domain]; // linear predictor
+  target += dot_product(w, y_vec .* lin_pred - log1p_exp(lin_pred));
 }
