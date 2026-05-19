@@ -168,7 +168,10 @@ nps_prior_mcmc <- function(
     scale_weight_covariate = TRUE,
     refresh = 10,
     threads_per_chain = NULL,
-    parallel_chains = NULL
+    parallel_chains = NULL,
+    grouped_pop_df = NULL,
+    X_formula = NULL, 
+    Psi_formula = NULL
 ) {
   n <- length(y)
   n_np <- length(y_NP)
@@ -283,19 +286,14 @@ nps_prior_mcmc <- function(
     print(d_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- d_fit$draws("beta", format = "matrix")
-    eta_draws <- d_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    d_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Distance")
+    beta_draws <- d_fit$draws("beta")
+    eta_draws <- d_fit$draws("eta_domain")
+
+    # Post-stratify
+    d_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    d_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Distance")
   }
 
   if (any(which_prior %in% c("dl", "dl10", "mdl", "mdl10"))) {
@@ -322,19 +320,14 @@ nps_prior_mcmc <- function(
     print(dl_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- dl_fit$draws("beta", format = "matrix")
-    eta_draws <- dl_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    dl_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Distance-log")
+    beta_draws <- dl_fit$draws("beta")
+    eta_draws <- dl_fit$draws("eta_domain")
+
+    # Post-stratify
+    dl_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    dl_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Distance-log")
   }
 
   if ("dl10" %in% which_prior) {
@@ -349,19 +342,14 @@ nps_prior_mcmc <- function(
     print(dl_ten_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- dl_ten_fit$draws("beta", format = "matrix")
-    eta_draws <- dl_ten_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    dl_ten_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Distance-log10")
+    beta_draws <- dl_ten_fit$draws("beta")
+    eta_draws <- dl_ten_fit$draws("eta_domain")
+
+    # Post-stratify
+    dl_ten_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    dl_ten_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Distance-log10")
   }
 
   # Mixed-distance priors
@@ -385,19 +373,14 @@ nps_prior_mcmc <- function(
     print(md_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- md_fit$draws("beta", format = "matrix")
-    eta_draws <- md_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    md_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance")
+    beta_draws <- md_fit$draws("beta")
+    eta_draws <- md_fit$draws("eta_domain")
+
+    # Post-stratify
+    md_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    md_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance")
   }
 
   if ("mdl" %in% which_prior) {
@@ -414,19 +397,14 @@ nps_prior_mcmc <- function(
     print(mdl_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- mdl_fit$draws("beta", format = "matrix")
-    eta_draws <- mdl_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    mdl_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log")
+    beta_draws <- mdl_fit$draws("beta")
+    eta_draws <- mdl_fit$draws("eta_domain")
+
+    # Post-stratify
+    mdl_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    mdl_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log")
   }
 
   if ("mdl10" %in% which_prior) {
@@ -442,19 +420,14 @@ nps_prior_mcmc <- function(
     print(mdl_ten_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- mdl_ten_fit$draws("beta", format = "matrix")
-    eta_draws <- mdl_ten_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    mdl_ten_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log10")
+    beta_draws <- mdl_ten_fit$draws("beta")
+    eta_draws <- mdl_ten_fit$draws("eta_domain")
+
+    # Post-stratify
+    mdl_ten_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    mdl_ten_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log10")
   }
 
   if (need_pp && is.null(a)) {
@@ -482,19 +455,14 @@ nps_prior_mcmc <- function(
     print(pp_fit$summary()[,"rhat"])
 
     # Extract posterior draws
-    beta_draws <- pp_fit$draws("beta", format = "matrix")
-    eta_draws <- pp_fit$draws("eta_domain", format = "matrix")
-    # Format into area-level summaries
-    pp_res <- format_stan_output(
-      X_eff, 
-      beta_draws, 
-      eta_draws,
-      domain_ps,
-      PUMA, 
-      PUMA_levels, 
-      typeIerr, 
-      paste0("NPS Prior w/ ", raking_or_pl, ": Power Prior")
+    beta_draws <- pp_fit$draws("beta")
+    eta_draws <- pp_fit$draws("eta_domain")
+
+    # Post-stratify
+    pp_res <- post_preds(
+      grouped_pop_df, beta_draws, eta_draws, typeIerr, X_formula, Psi_formula, stan = TRUE
     )
+    pp_res$model <- paste0("NPS Prior w/ ", raking_or_pl, ": Power Prior")
   }
 
   res_list <- list()
