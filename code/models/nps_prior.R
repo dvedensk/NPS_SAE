@@ -145,7 +145,6 @@ calculate_adaptive_power_prior_a <- function(y_ps, X_ps, y_nps, X_nps, verbose =
 # Main function for getting predictions from all four prior specifications
 nps_prior_mcmc <- function(
     d_mod, 
-    # md_mod
     pp_mod,
     y, 
     X, 
@@ -160,7 +159,7 @@ nps_prior_mcmc <- function(
     warmup = 1000,
     chains = 4,
     seed = 99,
-    which_prior = c("pp", "d", "dl", "dl10"),
+    which_prior = c("pp", "d", "dl", "dl10", "md", "mdl", "mdl10"),
     a = NULL,
     domain_ps = NULL,
     domain_nps = NULL,
@@ -175,9 +174,9 @@ nps_prior_mcmc <- function(
   n_np <- length(y_NP)
 
   which_prior <- unique(which_prior)
-  valid_priors <- c("pp", "d", "dl", "dl10")
+  valid_priors <- c("pp", "d", "dl", "dl10", "md", "mdl", "mdl10")
   if (!all(which_prior %in% valid_priors)) {
-    stop("which_prior must be one or more of: pp, d, dl, dl10.")
+    stop("which_prior must be one or more of: pp, d, dl, dl10, md, mdl, mdl10.")
   }
 
   if(is.null(wts)) { # If not using pseudolikelihood
@@ -204,9 +203,7 @@ nps_prior_mcmc <- function(
 
   p <- ncol(X_eff)
 
-  # TODO: regression test after renaming md -> d
-  # TODO: implement `mixed-distance`
-  need_d <- any(which_prior %in% c("d", "dl", "dl10"))
+  need_d <- any(which_prior %in% c("d", "dl", "dl10", "md", "mdl", "mdl10"))
   need_pp <- "pp" %in% which_prior
   need_glm <- need_d || (need_pp && is.null(a))
 
@@ -301,7 +298,7 @@ nps_prior_mcmc <- function(
     )
   }
 
-  if ("dl" %in% which_prior || "dl10" %in% which_prior) {
+  if (any(which_prior %in% c("dl", "dl10", "mdl", "mdl10"))) {
     # for distance-log priors, we estimate the variance of the MLE 
     # of each coefficient based on the NPS 
     NP_vars <- glm_fit_NP %>% 
@@ -367,6 +364,99 @@ nps_prior_mcmc <- function(
     )
   }
 
+  # Mixed-distance priors
+  need_md <- any(which_prior %in% c("md", "mdl", "mdl10"))
+  if(need_md) {
+    md_base_data <- d_base_data
+    md_base_data$beta_prior_mean[1] <- 0
+  }
+
+  if ("md" %in% which_prior) {
+    # Distance prior
+    prior_sds <- sqrt(sq_dist)
+    prior_sds[1] <- 3
+
+    md_data <- c(md_base_data, list(
+      beta_prior_sd = prior_sds
+    ))
+
+    md_fit <- run_sample(d_mod, md_data)
+
+    print(md_fit$summary()[,"rhat"])
+
+    # Extract posterior draws
+    beta_draws <- md_fit$draws("beta", format = "matrix")
+    eta_draws <- md_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    md_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance")
+    )
+  }
+
+  if ("mdl" %in% which_prior) {
+    # Mixed-Distance-log
+    prior_sds <- sqrt(maxes / log(n_np))
+    prior_sds[1] <- 3
+
+    mdl_data <- c(md_base_data, list(
+      beta_prior_sd = prior_sds
+    ))
+
+    mdl_fit <- run_sample(d_mod, mdl_data)
+
+    print(mdl_fit$summary()[,"rhat"])
+
+    # Extract posterior draws
+    beta_draws <- mdl_fit$draws("beta", format = "matrix")
+    eta_draws <- mdl_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    mdl_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log")
+    )
+  }
+
+  if ("mdl10" %in% which_prior) {
+    prior_sds <- sqrt(maxes / log10(n_np))
+    prior_sds[1] <- 3
+
+    mdl_ten_data <- c(md_base_data, list(
+      beta_prior_sd = prior_sds
+    ))
+
+    mdl_ten_fit <- run_sample(d_mod, mdl_ten_data)
+
+    print(mdl_ten_fit$summary()[,"rhat"])
+
+    # Extract posterior draws
+    beta_draws <- mdl_ten_fit$draws("beta", format = "matrix")
+    eta_draws <- mdl_ten_fit$draws("eta_domain", format = "matrix")
+    # Format into area-level summaries
+    mdl_ten_res <- format_stan_output(
+      X_eff, 
+      beta_draws, 
+      eta_draws,
+      domain_ps,
+      PUMA, 
+      PUMA_levels, 
+      typeIerr, 
+      paste0("NPS Prior w/ ", raking_or_pl, ": Mixed-Distance-log10")
+    )
+  }
+
   if (need_pp && is.null(a)) {
     # Power Prior
     # Set power prior exponent to p-value corresponding to Hotelling T^2 test
@@ -411,6 +501,9 @@ nps_prior_mcmc <- function(
   if ("d" %in% which_prior) res_list[["d"]] <- d_res
   if ("dl" %in% which_prior) res_list[["dl"]] <- dl_res
   if ("dl10" %in% which_prior) res_list[["dl10"]] <- dl_ten_res
+  if ("md" %in% which_prior) res_list[["md"]] <- md_res
+  if ("mdl" %in% which_prior) res_list[["mdl"]] <- mdl_res
+  if ("mdl10" %in% which_prior) res_list[["mdl10"]] <- mdl_ten_res
   if ("pp" %in% which_prior) res_list[["pp"]] <- pp_res
   res_df <- do.call(rbind, res_list)
   

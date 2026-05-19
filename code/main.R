@@ -71,8 +71,8 @@ PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52) # Extreme (default)
 
 # NPS prior configuration
-# Choose from: "pp", "d", "dl", "dl10"
-nps_prior_which <- c("pp", "d")
+# Choose from: "pp", "d", "dl", "dl10", "md", "mdl", "mdl10"
+nps_prior_which <- c("pp", "d", "dl", "dl10", "md", "mdl", "mdl10")
 scale_nps_prior_weight_covariate <- TRUE
 
 # Other simulation parameters
@@ -391,7 +391,7 @@ for (sim in 1:Nsim) {
   }
 
   nps_prior_pl_res <- nps_prior_mcmc(
-    md_mod = nps_prior_d_mod,
+    d_mod = nps_prior_d_mod,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
@@ -432,7 +432,7 @@ for (sim in 1:Nsim) {
   nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
 
   nps_prior_rak_res <- nps_prior_mcmc(
-    md_mod = nps_prior_d_mod,
+    d_mod = nps_prior_d_mod,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
