@@ -39,12 +39,12 @@ int_score <- function(alpha, truth, L, U){
 estimate_ipw <- function(ps, nps, cov_formula, method) {
   stopifnot(method %in% c("ignorable", "beta_reg", "weighted"))
 
-  ps_weights <- ps$PWGTP #Need to double check whether scaling matters here
+  ps_weights <- ps$weights #Need to double check whether scaling matters here
       
   if(method == "beta_reg") {
     filter_id <- which(ps_weights == 1)
-    ps$PWGTP[filter_id] <- 1.001
-    beta_reg_out <- betareg::betareg(formula=as.formula(paste("1/PWGTP",
+    ps$weights[filter_id] <- 1.001
+    beta_reg_out <- betareg::betareg(formula=as.formula(paste("1/weights",
                                                      deparse(cov_formula))),
                             data=ps)
     nps_prob_pred <- predict(beta_reg_out, newdata=nps)    
@@ -55,11 +55,11 @@ estimate_ipw <- function(ps, nps, cov_formula, method) {
     )
 
     combined <- combined %>%
-        mutate(PWGTP = ifelse(Z == 1, 1, PWGTP))         
+        mutate(weights = ifelse(Z == 1, 1, weights))         
         
     fit_prop <- glm(
       formula = as.formula(paste0("Z ", deparse(cov_formula))),
-      weights = PWGTP, 
+      weights = weights, 
       family  = binomial(),
       data    = combined
     )
