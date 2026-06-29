@@ -7,8 +7,8 @@ data {
   matrix[n, p] X;                 // PS design matrix
   matrix[n_np, p] X_np;           // NPS design matrix
 
-  vector<lower=0, upper=1>[n] y;        // PS outcomes
-  vector<lower=0, upper=1>[n_np] y_np;   // NPS outcomes
+  array[n] int<lower=0, upper=1> y;        // PS outcomes
+  array[n_np] int<lower=0, upper=1> y_np;   // NPS outcomes
 
   vector<lower=0>[n] w;           // PS weights (rescaled to sum to n)
   real<lower=0, upper=1> a;       // power prior exponent
@@ -17,27 +17,27 @@ data {
   array[n_np] int<lower=1, upper=J> domain_np; // NPS domain indices
 }
 
-parameters {
-  vector[p] beta;
-  vector[J] z_domain;
-  real<lower=0> sigma_domain;
+transformed data {
+  vector[n] y_vec = to_vector(y);
 }
 
-transformed parameters {
+parameters {
+  vector[p] beta;
   vector[J] eta_domain;
-  eta_domain = sigma_domain * z_domain; // non-centered for better efficiency
+  real<lower=0> sigma_domain;
 }
 
 model {
   beta ~ normal(0, 3);
   sigma_domain ~ cauchy(0, 5);
-  z_domain ~ normal(0, 1);
+  eta_domain ~ normal(0, sigma_domain);
 
-  // PS pseudolikelihood (vectorized)
-  vector[n] eta = X * beta + eta_domain[domain]; // linear predictor
-  target += dot_product(w, y .* eta - log1p_exp(eta));
+  // PS pseudolikelihood 
+  vector[n] lin_pred = X * beta + eta_domain[domain];
+  target += dot_product(w, y_vec .* lin_pred - log1p_exp(lin_pred));
 
-  // NPS likelihood (power prior) (vectorized)
-  vector[n_np] eta_np = X_np * beta + eta_domain[domain_np];
-  target += a * (y_np .* eta_np - log1p_exp(eta_np));
+  // NPS likelihood (power prior)
+  if(a > 0) {
+    target += a * bernoulli_logit_glm_lpmf(y_np | X_np, eta_domain[domain_np], beta);
+  }
 }

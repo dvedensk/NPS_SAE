@@ -24,4 +24,5 @@ code/models/bulm
 code/models/mrp_int2
 code/models/nps_prior_logistic
 code/models/nps_prior_pp
+code/models/nps_prior_d
 code/models/si2

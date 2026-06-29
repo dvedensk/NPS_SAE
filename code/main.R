@@ -46,6 +46,11 @@ nps_prior_pp_mod <- cmdstan_model(
   cpp_options = list(stan_threads = TRUE)
 )
 
+nps_prior_d_mod <- cmdstan_model(
+  file.path("code", "models", "nps_prior_d.stan"),
+  cpp_options = list(stan_threads = TRUE)
+)
+
 Sys.setenv(STAN_NUM_THREADS = parallel::detectCores())
 
 # ============================================================
@@ -66,8 +71,8 @@ PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52) # Extreme (default)
 
 # NPS prior configuration
-# Choose from: "pp", "md", "mdl", "mdl10"
-nps_prior_which <- c("pp")
+# Choose from: "pp", "d", "dl", "dl10", "md", "mdl", "mdl10"
+nps_prior_which <- c("pp", "d", "dl", "dl10", "md", "mdl", "mdl10")
 scale_nps_prior_weight_covariate <- TRUE
 
 # Other simulation parameters
@@ -386,7 +391,7 @@ for (sim in 1:Nsim) {
   }
 
   nps_prior_pl_res <- nps_prior_mcmc(
-    md_mod = NULL,
+    d_mod = nps_prior_d_mod,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
@@ -407,7 +412,10 @@ for (sim in 1:Nsim) {
     domain_nps = domain_nps,
     domain_levels = domain_levels,
     threads_per_chain = mcmc_threads_per_chain,
-    parallel_chains = n_chains
+    parallel_chains = n_chains, 
+    grouped_pop_df = acs_pop_grouped, 
+    X_formula = X_formula, 
+    Psi_formula = Psi_formula
   )
 
   # Raked weights for weight-as-covariate prior
@@ -426,8 +434,32 @@ for (sim in 1:Nsim) {
   nps_rake_weights <- weights(nps_raked_design)
   nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
 
+  # TODO: confirm this is correct
+  # Get population-level raking weights (normalized) for post-stratification
+  pop_grouped_design <- svydesign(ids = ~1, data = acs_pop_grouped, weights = ~n)
+  pop_raked_design <- rake(
+    design = pop_grouped_design,
+    sample.margins = rake_formulas,
+    population.margins = pop_margins
+  )
+  # The weight in the design is n * weight_factor. We want the weight_factor part.
+  pop_rake_weights <- weights(pop_raked_design) / acs_pop_grouped$n
+  
+  # Scale to match the sample weight scaling (mean 1)
+  # In nps_prior_mcmc, weights are rescaled if they don't sum to n.
+  # Here we just want them to be on the same scale as nps_rake_weights.
+  if (scale_nps_prior_weight_covariate) {
+    mu_wt <- mean(nps_rake_weights)
+    sd_wt <- sd(nps_rake_weights)
+    pop_rake_weights <- (pop_rake_weights - mu_wt) / sd_wt
+  }
+
+  acs_pop_grouped_raked <- acs_pop_grouped %>%
+    ungroup() %>% 
+    mutate(weight_cov = pop_rake_weights)
+
   nps_prior_rak_res <- nps_prior_mcmc(
-    md_mod = NULL,
+    d_mod = nps_prior_d_mod,
     pp_mod = nps_prior_pp_mod,
     y = y_ps,
     X = X_ps,
@@ -450,7 +482,10 @@ for (sim in 1:Nsim) {
     weight_covariate = list(ps = ps_scale_weights, nps = nps_rake_weights),
     scale_weight_covariate = scale_nps_prior_weight_covariate,
     threads_per_chain = mcmc_threads_per_chain,
-    parallel_chains = n_chains
+    parallel_chains = n_chains, 
+    grouped_pop_df = acs_pop_grouped_raked, 
+    X_formula = update(X_formula, ~ . + weight_cov), 
+    Psi_formula = Psi_formula
   )
 
   # ============================================================
