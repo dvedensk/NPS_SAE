@@ -143,7 +143,7 @@ calculate_adaptive_power_prior_a <- function(y_ps, X_ps, y_nps, X_nps, verbose =
   ))
 }
 
-calculate_exp_link_a <- function(y_ps, X_ps, y_nps, X_nps, c_null = 1.0, verbose = TRUE) {
+calculate_exp_link_a <- function(y_ps, X_ps, y_nps, X_nps, null_target = 0.9, verbose = TRUE) {
   glm_ps  <- glm(y_ps  ~ X_ps  - 1, family = binomial())
   glm_nps <- glm(y_nps ~ X_nps - 1, family = binomial())
   diff_vec <- coef(glm_ps) - coef(glm_nps)
@@ -152,16 +152,20 @@ calculate_exp_link_a <- function(y_ps, X_ps, y_nps, X_nps, c_null = 1.0, verbose
   V_sum <- vcov(glm_ps) + vcov(glm_nps)
   t2 <- as.numeric(t(diff_vec) %*% solve(V_sum) %*% diff_vec)
 
-  a <- exp(-c_null * t2)
+  # Calibrate c so that a = null_target at the null mean of t² (= p)
+  p <- ncol(X_ps)
+  c_val <- -log(null_target) / p
+  a <- exp(-c_val * t2)
 
   if (verbose) {
     cat("\nExp-link Power Prior:",
         "\n- T² (V_PS + V_NPS):", round(t2, 4),
-        "\n- c:", c_null,
+        "\n- null_target:", null_target,
+        "\n- c = -log(target)/p:", round(c_val, 6),
         "\n- a = exp(-c·t²):", round(a, 6), "\n\n")
   }
 
-  list(a = a, t2 = t2, c = c_null,
+  list(a = a, t2 = t2, c = c_val, null_target = null_target,
        beta_ps = coef(glm_ps), beta_nps = coef(glm_nps), diff = diff_vec)
 }
 

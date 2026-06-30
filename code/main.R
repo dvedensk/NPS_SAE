@@ -379,7 +379,7 @@ for (sim in 1:Nsim) {
 
   # Compute both a values: p-value link and exp-link
   pp_pval <- calculate_adaptive_power_prior_a(y_ps, X_ps, y_nps, X_nps, verbose = TRUE)
-  pp_exp  <- calculate_exp_link_a(y_ps, X_ps, y_nps, X_nps, c_null = 1.0, verbose = TRUE)
+  pp_exp  <- calculate_exp_link_a(y_ps, X_ps, y_nps, X_nps, null_target = 0.9, verbose = TRUE)
 
   # Shared args for nps_prior_mcmc
   nps_prior_shared <- list(
