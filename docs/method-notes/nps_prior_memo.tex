@@ -1,0 +1,82 @@
+\documentclass[11pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage[font=small,labelfont=bf,skip=4pt]{caption}
+\usepackage[protrusion=true,expansion=false]{microtype}
+\usepackage{parskip}
+\usepackage{enumitem}
+\setlength{\parskip}{0.4\baselineskip}
+\setlist{itemsep=2pt, topsep=2pt}
+
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{0.6em}{0.3em}
+
+\begin{document}
+
+\begin{center}
+{\Large\bfseries NPS-Prior adaptive weighting: diagnosis and proposed fix}\\[0.3em]
+{\normalsize Sho \quad\textbar\quad June 25, 2026}
+\end{center}
+\vspace{0.5em}
+
+\section*{The core problem}
+
+Salvatore et al.\ set the power-prior weight $a$ to the p-value of a Hotelling $T^2$ test comparing $\hat\beta_{PS}$ to $\hat\beta_{NPS}$. But, \textbf{a p-value is a weird thing to weight a likelihood with}.  Under $H_0$ (PS and NPS drawn from the same population), this p-value is Uniform$(0,1)$. So a \textit{perfectly} compatible NPS gets a random weight averaging $0.5$, not $1$.
+
+Under any fixed bias, the p-value goes to zero as the PS grows. At our SAE sample sizes ($n_{PS} \approx 7{,}100$), $a$ underflows to $\approx 10^{-30}$ or smaller in every scenario, the NPS is discarded regardless of the NPS bias.
+
+The current code uses $V_{PS}^{-1}$ in the Hotelling denominator. The correct two-sample form is $(V_{PS} + V_{NPS})^{-1}$, since $\hat\beta_{NPS}$ is an estimate with its own variance, not a fixed reference. Worth fixing for correctness, but at our sizes the correction barely moves $a$.
+
+\section*{What can be done?}
+
+\textbf{1. Linking function on $a$.} Replace the p-value transform with a smooth, null-calibrated one on the same Hotelling statistic:
+$$
+t^2 = \Delta^\top (V_{PS} + V_{NPS})^{-1} \Delta, \qquad a = \exp(-c \cdot t^2), \qquad c = -\log(0.9)/p.
+$$
+Under $H_0$, $t^2 \sim \chi^2_p$ with mean $p$ (here $p = 9$); $c$ is calibrated so $a = 0.9$ at the null mean. So a compatible NPS concentrates near $0.9$ instead of being Uniform, and $a$ declines smoothly with $t^2$ under bias.
+
+\textbf{2. Re-sampling.} Subsample the NPS to $m \approx 300$ before computing $a$, so the Hotelling test isn't over-powered and the p-value lands in a usable range. The resulting $a$ is highly unstable across subsample draws (Results, §2). Stable estimation requires averaging across many draws, adding a tuning knob.
+
+\textbf{3. Beta prior on $a$.} Putting $a \sim \text{Beta}(\alpha, \beta)$ and letting the joint posterior decide is the natural Bayesian move. The naive version doesn't work: the joint density $L(\beta \mid D_{NPS})^a$ has an $a$-dependent normalizing constant $C(a) = \int L(\beta \mid D_{NPS})^a \pi_0(\beta)\, d\beta$ that the unnormalized power prior ignores, so the marginal posterior on $a$ is dominated by its prior. The principled fix (normalized power prior; Neuenschwander et al.\ 2009) requires computing $C(a)$ numerically on a grid via bridge or path sampling. Tractable but heavy.
+
+I tried (1) and (2) empirically.
+
+\section*{Results}
+
+\textbf{(1) The exp link.} Real MSE gains, confirmed by full Stan MCMC over 3 seeds $\times$ 3 scenarios (4 chains, $\hat R = 1.00$, no failures):
+
+\begin{center}
+\begin{tabular}{lcccc}
+\toprule
+Scenario & PS-only MSE & p-value MSE & exp-link MSE & exp-link gain \\
+\midrule
+Extreme    & 0.00712 & 0.00712 & 0.00710 & $0\%$ \\
+Typical    & 0.00711 & 0.00712 & 0.00621 & $\mathbf{-13\%}$ \\
+Favorable  & 0.00713 & 0.00712 & 0.00533 & $\mathbf{-25\%}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Coverage holds at nominal ($\approx 0.94$, worst-cell $0.92$) across all configurations}. The exp link correctly ignores Extreme ($a \approx 0$) and borrows meaningfully in Typical and Favorable. Despite large effective borrows ($a \cdot n_{NPS}$ up to $\approx 35{,}000$ against a $7{,}100$-unit PS), the PS likelihood corrects residual bias.
+
+\textbf{(2) Re-sampling.} Subsampling the NPS to $m \approx 300$ keeps the Hotelling test from being over-powered, but the resulting $a$ is highly unstable. So I had Claude do an analysis where a single PS/NPS pair is fixed and varying only which units land in the subsample ($B = 300$ re-draws). Even in the favorable setting the distribution of $a$ has a lot of mass near zero and a $q_{10}$--$q_{90}$ range of 0.02--0.74 (median 0.26). \textbf{Resampling does not fix the p-value randomness from sample to sample.} Stable estimation would require averaging $a$ across many subsample draws.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{fig_subsample_a_instability.png}
+\caption*{Power-prior weight $a$ from 300 independent subsamples ($m = 300$) of a single fixed PS/NPS pair (dashed = median). With the data held constant, the $q_{10}$--$q_{90}$ range of $a$ covers most of $[0,1]$ in the Favorable case.}
+\end{figure}
+
+\section*{Takeaway and Caveats}
+
+The exp link achieves comparable median borrowing at the full sample with no draw-to-draw variability and no resampling required. The exp link is a minimal modification using the same machinery as Salvatore's recipe --- same $\Delta$, same $V_{PS} + V_{NPS}$, just a smooth transform of $t^2$ rather than a p-value transform.
+
+\textbf{Caveats:}
+\begin{itemize}
+\item The functional form $\exp(-c \cdot t^2)$ is a heuristic where $c$ is anchored at one PS size. The $H_0$ behavior is qualitatively repaired (Uniform $\to$ concentrated near $0.9$). Under $H_1$, $a$ decreases as the PS sample size increases, which is the right behavior.
+\item A more principled refinement is a natural future direction to flag in the discussion.
+\end{itemize}
+
+\end{document}
