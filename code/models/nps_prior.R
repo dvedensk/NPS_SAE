@@ -101,13 +101,14 @@ calculate_adaptive_power_prior_a <- function(y_ps, X_ps, y_nps, X_nps, verbose =
   beta_nps_hat <- coef(glm_nps)
   diff_vec <- beta_ps_hat - beta_nps_hat
 
-  # Hotelling T^2 test
+  # Hotelling T^2 test (two-sample: V_PS + V_NPS)
   n_ps <- length(y_ps)
   p_coef <- ncol(X_ps)
   cov_beta_ps <- vcov(glm_ps)
+  cov_beta_nps <- vcov(glm_nps)
 
-  # T^2 statistic
-  t2 <- as.numeric(t(diff_vec) %*% solve(cov_beta_ps) %*% diff_vec)
+  # T^2 statistic with corrected denominator
+  t2 <- as.numeric(t(diff_vec) %*% solve(cov_beta_ps + cov_beta_nps) %*% diff_vec)
 
   # Convert to F-statistic
   f_scaling <- p_coef * (n_ps - 1) / (n_ps - p_coef)
@@ -140,6 +141,32 @@ calculate_adaptive_power_prior_a <- function(y_ps, X_ps, y_nps, X_nps, verbose =
     beta_nps = beta_nps_hat,
     diff = diff_vec
   ))
+}
+
+calculate_exp_link_a <- function(y_ps, X_ps, y_nps, X_nps, null_target = 0.9, verbose = TRUE) {
+  glm_ps  <- glm(y_ps  ~ X_ps  - 1, family = binomial())
+  glm_nps <- glm(y_nps ~ X_nps - 1, family = binomial())
+  diff_vec <- coef(glm_ps) - coef(glm_nps)
+
+  # Two-sample Hotelling T^2: V_PS + V_NPS
+  V_sum <- vcov(glm_ps) + vcov(glm_nps)
+  t2 <- as.numeric(t(diff_vec) %*% solve(V_sum) %*% diff_vec)
+
+  # Calibrate c so that a = null_target at the null mean of t² (= p)
+  p <- ncol(X_ps)
+  c_val <- -log(null_target) / p
+  a <- exp(-c_val * t2)
+
+  if (verbose) {
+    cat("\nExp-link Power Prior:",
+        "\n- T² (V_PS + V_NPS):", round(t2, 4),
+        "\n- null_target:", null_target,
+        "\n- c = -log(target)/p:", round(c_val, 6),
+        "\n- a = exp(-c·t²):", round(a, 6), "\n\n")
+  }
+
+  list(a = a, t2 = t2, c = c_val, null_target = null_target,
+       beta_ps = coef(glm_ps), beta_nps = coef(glm_nps), diff = diff_vec)
 }
 
 # Main function for getting predictions from all four prior specifications
@@ -433,7 +460,7 @@ nps_prior_mcmc <- function(
   if (need_pp && is.null(a)) {
     # Power Prior
     # Set power prior exponent to p-value corresponding to Hotelling T^2 test
-    cov_beta_hat <- vcov(glm_fit)
+    cov_beta_hat <- vcov(glm_fit) + vcov(glm_fit_NP)
     t2 <- crossprod(diff_vec, (cov_beta_hat %>% chol() %>% chol2inv()) %*% diff_vec)
     t2 <- as.numeric(t2)
     f = p * (n - 1) / (n - p)
