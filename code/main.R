@@ -70,9 +70,6 @@ PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 #   Favorable: PWGTP=0.10, POVPIP=-0.22 → DDC=-0.014, ESS=254.6, bias=-0.030 (low-bias check)
 NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52) # Extreme (default)
 
-# NPS prior configuration
-# Choose from: "pp", "d", "dl", "dl10", "md", "mdl", "mdl10"
-nps_prior_which <- c("pp")
 # Other simulation parameters
 Nsim <- 15
 alpha <- .05 # for interval estimates

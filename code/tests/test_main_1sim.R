@@ -42,7 +42,6 @@ response_var <- "PUBCOV"
 response_type <- "binary"
 PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52)
-nps_prior_which <- c("pp")
 Nsim <- 1 # single replicate
 alpha <- .05
 mcmc_iter <- 1000
@@ -214,25 +213,32 @@ for (sim in 1:Nsim) {
   domain_nps <- match(nps$PUMA, domain_levels)
   PUMA_levels <- domain_levels
 
-  power_prior_a <- calculate_adaptive_power_prior_a(
-    y_ps = y_ps, X_ps = X_ps,
-    y_nps = y_nps, X_nps = X_nps, verbose = TRUE
-  )$a
+  # Compute both a values: p-value link and exp-link
+  pp_pval <- calculate_adaptive_power_prior_a(y_ps, X_ps, y_nps, X_nps, verbose = TRUE)
+  pp_exp  <- calculate_exp_link_a(y_ps, X_ps, y_nps, X_nps, null_target = 0.9, verbose = TRUE)
 
-  nps_prior_pl_res <- nps_prior_mcmc(
-    md_mod = NULL, pp_mod = nps_prior_pp_mod,
+  nps_prior_shared <- list(
+    d_mod = NULL, pp_mod = nps_prior_pp_mod,
     y = y_ps, X = X_ps, y_NP = y_nps, X_NP = X_nps, wts = ps_scale_weights,
     PUMA = factor(ps$PUMA, levels = domain_levels), PUMA_levels = PUMA_levels,
     raking_or_pl = "Pseudolikelihood", typeIerr = alpha, niter = mcmc_iter, warmup = mcmc_burn,
-    chains = n_chains, seed = curr_seed, which_prior = nps_prior_which, a = power_prior_a,
+    chains = n_chains, seed = curr_seed, which_prior = "pp",
     domain_ps = domain_ps, domain_nps = domain_nps, domain_levels = domain_levels,
-    threads_per_chain = mcmc_threads_per_chain, parallel_chains = n_chains
+    threads_per_chain = mcmc_threads_per_chain, parallel_chains = n_chains,
+    grouped_pop_df = acs_pop_grouped,
+    X_formula = X_formula, Psi_formula = Psi_formula
   )
+
+  nps_prior_pval_res <- do.call(nps_prior_mcmc, c(nps_prior_shared, list(a = pp_pval$a)))
+  nps_prior_pval_res$model <- "NPS Prior: Power Prior (p-value)"
+
+  nps_prior_exp_res <- do.call(nps_prior_mcmc, c(nps_prior_shared, list(a = pp_exp$a)))
+  nps_prior_exp_res$model <- "NPS Prior: Power Prior (exp-link)"
 
   results[[sim]] <- rbind(
     direst, bulm_ps_out, beta_HT, uncond_HT, bulm_beta_out, bulm_uncond_out,
     mrpr, mrpp, mrpint_r, mrpint_p, mrpint_r_pubcov, mrpint_p_pubcov,
-    VSW_out, ciginas_res, nps_prior_pl_res
+    VSW_out, ciginas_res, nps_prior_pval_res, nps_prior_exp_res
   )
 }
 
