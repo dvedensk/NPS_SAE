@@ -43,7 +43,6 @@ response_type <- "binary"
 PS_weight_config <- list(WAGP = 0.05, PWGTP = -0.2)
 NPS_weight_config <- list(PWGTP = 0.10, POVPIP = -1.52)
 nps_prior_which <- c("pp")
-scale_nps_prior_weight_covariate <- TRUE
 Nsim <- 1 # single replicate
 alpha <- .05
 mcmc_iter <- 1000
@@ -230,32 +229,10 @@ for (sim in 1:Nsim) {
     threads_per_chain = mcmc_threads_per_chain, parallel_chains = n_chains
   )
 
-  rake_vars <- c("AGEP_binned", "RAC1P", "SEX")
-  pop_margins <- lapply(rake_vars, function(v) {
-    as.data.frame(table(acs_pop[[v]])) %>% rename(!!v := Var1, Freq = Freq)
-  })
-  nps_design <- svydesign(ids = ~1, data = nps, weights = ~1)
-  rake_formulas <- lapply(rake_vars, function(v) as.formula(paste0("~", v)))
-  nps_raked_design <- rake(design = nps_design, sample.margins = rake_formulas, population.margins = pop_margins)
-  nps_rake_weights <- weights(nps_raked_design)
-  nps_rake_weights <- length(nps_rake_weights) * nps_rake_weights / sum(nps_rake_weights)
-
-  nps_prior_rak_res <- nps_prior_mcmc(
-    md_mod = NULL, pp_mod = nps_prior_pp_mod,
-    y = y_ps, X = X_ps, y_NP = y_nps, X_NP = X_nps, wts = NULL,
-    PUMA = factor(ps$PUMA, levels = domain_levels), PUMA_levels = PUMA_levels,
-    raking_or_pl = "Raking", typeIerr = alpha, niter = mcmc_iter, warmup = mcmc_burn,
-    chains = n_chains, seed = curr_seed, which_prior = nps_prior_which, a = power_prior_a,
-    domain_ps = domain_ps, domain_nps = domain_nps, domain_levels = domain_levels,
-    weight_covariate = list(ps = ps_scale_weights, nps = nps_rake_weights),
-    scale_weight_covariate = scale_nps_prior_weight_covariate,
-    threads_per_chain = mcmc_threads_per_chain, parallel_chains = n_chains
-  )
-
   results[[sim]] <- rbind(
     direst, bulm_ps_out, beta_HT, uncond_HT, bulm_beta_out, bulm_uncond_out,
     mrpr, mrpp, mrpint_r, mrpint_p, mrpint_r_pubcov, mrpint_p_pubcov,
-    VSW_out, ciginas_res, nps_prior_pl_res, nps_prior_rak_res
+    VSW_out, ciginas_res, nps_prior_pl_res
   )
 }
 
