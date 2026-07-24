@@ -207,7 +207,9 @@ getMRP<- function(MR,
         prob = ps$weights
       )
       ps_boot <- ps[boot_idx, ]
-      ps_boot_cells <- collapse_to_cells(ps_boot, nps_ca, PUMA_lev, weight_col = "weights")
+      # Bootstrap already drew ps_boot with prob = design weights, so counting each
+      # resampled unit equally (weight_col = NULL) avoids double-weighting (~ w^2).
+      ps_boot_cells <- collapse_to_cells(ps_boot, nps_ca, PUMA_lev, weight_col = NULL)
       mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0) {
         poststrat_SxJ(
           beta = beta,
@@ -631,7 +633,9 @@ getMRP_INT <- function(MR,
       ps_boot_cells <- collapse_to_cells_int(
         df = ps_boot, train_ref = train_ref, PUMA_lev = PUMA_lev,
         psi_vec = psi_boot, psi_bin_vec = psi_bin_boot,
-        weight_col = "weights", bin_map = bin_map, bin_digits = bin_digits, map_bins = map_bins
+        # Bootstrap already drew ps_boot with prob = design weights, so weight_col = NULL
+        # (count resampled units equally) avoids double-weighting (~ w^2).
+        weight_col = NULL, bin_map = bin_map, bin_digits = bin_digits, map_bins = map_bins
       )
       mu_boot_array[, , l] <- if (nrow(ps_boot_cells$Xp) > 0) {
         poststrat_int_SxJ(beta, beta_psi, zeta, a_puma,
