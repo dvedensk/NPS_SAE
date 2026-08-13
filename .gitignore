@@ -1,0 +1,28 @@
+data
+.Rproj.user
+.Rproj
+*.Rproj
+.Rhistory
+.DS_Store
+*.pdf
+
+# Generated logs and local experiment outputs
+*.log
+*.rds
+*.RDS
+
+# Rendered R Markdown artifacts
+*.html
+*_cache/
+*_files/
+
+# Downloaded archives and generated binary artifacts
+*.zip
+
+# CmdStan executables generated from .stan files
+code/models/bulm
+code/models/mrp_int2
+code/models/nps_prior_logistic
+code/models/nps_prior_pp
+code/models/nps_prior_d
+code/models/si2
